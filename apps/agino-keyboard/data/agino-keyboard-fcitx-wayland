@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# KWin must launch this process. Keep its private WAYLAND_SOCKET exclusively for Fcitx.
+conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5/conf"
+mkdir -p "$conf_dir"
+conf="$conf_dir/waylandim.conf"
+task_tmp="$(mktemp "$conf_dir/.agino-wayland.XXXXXX")"
+trap 'rm -f "$task_tmp"' EXIT
+if [[ -f "$conf" ]];then
+ awk 'BEGIN{found=0} /^DetectApplication=/{print "DetectApplication=False";found=1;next} {print} END{if(!found)print "DetectApplication=False"}' "$conf" > "$task_tmp"
+else printf 'DetectApplication=False\n' > "$task_tmp";fi
+chmod 600 "$task_tmp";mv "$task_tmp" "$conf"
+export FCITX_ADDON_DIRS="/usr/lib/agino-keyboard/fcitx5:/usr/lib/x86_64-linux-gnu/fcitx5"
+exec fcitx5 --disable waylandim --enable aginowaylandim --keep

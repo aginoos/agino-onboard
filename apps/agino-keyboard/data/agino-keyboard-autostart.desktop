@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Agino Screen Keyboard
+Exec=agino-keyboard --hidden
+Icon=agino-keyboard
+OnlyShowIn=Deepin;DDE;
+X-GNOME-Autostart-enabled=true

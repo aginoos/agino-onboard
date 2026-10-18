@@ -1,0 +1,18 @@
+--- a/src/modules/xcb/xcbconnection.cpp
++++ b/src/modules/xcb/xcbconnection.cpp
+@@ -364,8 +364,14 @@
+                       client_message->data.data8 + 16, uuid.begin());
+             InputContext *ic =
+                 parent_->instance()->inputContextManager().findByUUID(uuid);
+-            if (ic) {
++            if (ic && ic->focusGroup() != group_) {
++                // Qt's DBus FocusIn can arrive before its X11 registration.
++                // Associating the same live context must preserve that focus.
++                const bool focused = ic->hasFocus();
+                 ic->setFocusGroup(group_);
++                if (focused) {
++                    ic->focusIn();
++                }
+             }
+         }
+     } else if (keyboard_->handleEvent(event)) {

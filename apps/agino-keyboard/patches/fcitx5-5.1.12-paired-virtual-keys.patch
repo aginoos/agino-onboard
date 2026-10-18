@@ -1,0 +1,164 @@
+--- a/src/frontend/waylandim/waylandimserver.h
++++ b/src/frontend/waylandim/waylandimserver.h
+@@ -18,6 +18,8 @@
+ #include "fcitx-utils/macros.h"
+ #include "fcitx-utils/signals.h"
+ #include "fcitx-utils/trackableobject.h"
++#include "fcitx-utils/utf8.h"
++#include <map>
+ #include "fcitx/event.h"
+ #include "fcitx/focusgroup.h"
+ #include "fcitx/inputcontext.h"
+@@ -101,6 +103,83 @@
+         if (!ic_) {
+             return;
+         }
++        // Agino virtual keys retain their caller-owned press/release lifecycle.
++        // KWin text-input-v3 does not translate arbitrary keysym events.
++        if (key.rawKey().isVirtual()) {
++            const auto &raw = key.rawKey();
++            uint32_t ownMask = 0;
++            switch (raw.sym()) {
++            case FcitxKey_Shift_L: case FcitxKey_Shift_R: ownMask = server_->stateMask_.shift_mask; break;
++            case FcitxKey_Control_L: case FcitxKey_Control_R: ownMask = server_->stateMask_.control_mask; break;
++            case FcitxKey_Alt_L: case FcitxKey_Alt_R: ownMask = server_->stateMask_.mod1_mask; break;
++            case FcitxKey_Super_L: case FcitxKey_Super_R: ownMask = server_->stateMask_.mod4_mask; break;
++            default: break;
++            }
++            // Releases carry the original press snapshot. Derive depression
++            // from the keys still held, including both sides of a modifier.
++            if (ownMask) {
++                if (key.isRelease()) virtualHeld_.erase(raw.sym());
++                else virtualHeld_[raw.sym()] = ownMask;
++            }
++            uint32_t virtualMask = 0;
++            for (const auto &[sym, mask] : virtualHeld_) virtualMask |= mask;
++            // A caller may request a chord without separate modifier presses.
++            // Its supplied states apply only to this non-modifier press.
++            if (!ownMask && !key.isRelease()) {
++                if (raw.states().test(KeyState::Shift)) virtualMask |= server_->stateMask_.shift_mask;
++                if (raw.states().test(KeyState::Ctrl)) virtualMask |= server_->stateMask_.control_mask;
++                if (raw.states().test(KeyState::Alt)) virtualMask |= server_->stateMask_.mod1_mask;
++                if (raw.states().test(KeyState::Super)) virtualMask |= server_->stateMask_.mod4_mask;
++            }
++            auto *state = server_->state_.get();
++            // Compositor echoes of our injected masks are not physical keys.
++            // Cache physical depression separately; otherwise a fast release
++            // followed by another key can resurrect an already released Ctrl.
++            if (!physicalModifiersInitialized_) {
++                physicalDepressed_ = state ? xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED) : 0;
++                physicalModifiersInitialized_ = true;
++            }
++            ic_->modifiers(serial_, virtualMask | physicalDepressed_,
++                           state ? xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED) : 0,
++                           state ? xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED) : 0,
++                           state ? xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE) : 0);
++            const auto unicode = xkb_keysym_to_utf32(raw.sym());
++            if (unicode >= 32 && unicode != 127 &&
++                !raw.states().test(KeyState::Ctrl) &&
++                !raw.states().test(KeyState::Alt) &&
++                !raw.states().test(KeyState::Super)) {
++                if (!key.isRelease()) {
++                    ic_->commitString(serial_, utf8::UCS4ToUTF8(unicode).c_str());
++                }
++                return;
++            }
++            auto code = raw.code();
++            auto *map = server_->keymap_.get();
++            if (!code && map) {
++                for (auto k = xkb_keymap_min_keycode(map);
++                     k <= xkb_keymap_max_keycode(map) && !code; ++k) {
++                    const auto active = state ? xkb_state_key_get_layout(state, k) : 0;
++                    const xkb_layout_index_t layout = active == XKB_LAYOUT_INVALID ? 0 : active;
++                    {
++                        for (xkb_level_index_t level = 0;
++                             level < xkb_keymap_num_levels_for_key(map, k, layout) && !code;
++                             ++level) {
++                            const xkb_keysym_t *syms = nullptr;
++                            const auto n = xkb_keymap_key_get_syms_by_level(map, k, layout, level, &syms);
++                            for (int i = 0; i < n; ++i) {
++                                if (syms[i] == raw.sym()) { code = k; break; }
++                            }
++                        }
++                    }
++                }
++            }
++            if (code >= 8) {
++                ic_->key(serial_, time_, code - 8,
++                         key.isRelease() ? WL_KEYBOARD_KEY_STATE_RELEASED
++                                         : WL_KEYBOARD_KEY_STATE_PRESSED);
++            }
++            return;
++        }
+         if (key.rawKey().code() && key.rawKey().states() == KeyState::NoState) {
+             sendKeyToVK(time_, key.rawKey(),
+                         key.isRelease() ? WL_KEYBOARD_KEY_STATE_RELEASED
+@@ -174,6 +253,10 @@
+     uint32_t serial_ = 0;
+     uint32_t time_ = 0;
+ 
++    mutable std::map<KeySym, uint32_t> virtualHeld_;
++    std::map<uint32_t, uint32_t> physicalHeld_;
++    mutable bool physicalModifiersInitialized_ = false;
++    mutable uint32_t physicalDepressed_ = 0;
+     uint32_t repeatKey_ = 0;
+     uint32_t repeatTime_ = 0;
+     KeySym repeatSym_ = FcitxKey_None;
+--- a/src/frontend/waylandim/waylandimserver.cpp
++++ b/src/frontend/waylandim/waylandimserver.cpp
+@@ -217,6 +217,10 @@
+ 
+ void WaylandIMInputContextV1::deactivate(wayland::ZwpInputMethodContextV1 *ic) {
+     if (ic_.get() == ic) {
++        virtualHeld_.clear();
++        physicalHeld_.clear();
++        physicalModifiersInitialized_ = false;
++        physicalDepressed_ = 0;
+         ic_.reset();
+         keyboard_.reset();
+         repeatInfo_.reset();
+@@ -430,6 +434,10 @@
+         return;
+     }
+ 
++    virtualHeld_.clear();
++    physicalHeld_.clear();
++    physicalModifiersInitialized_ = false;
++    physicalDepressed_ = 0;
+     server_->state_.reset(xkb_state_new(server_->keymap_.get()));
+     if (!server_->state_) {
+         server_->keymap_.reset();
+@@ -483,6 +491,25 @@
+                        server_->modifiers_, code),
+                    state == WL_KEYBOARD_KEY_STATE_RELEASED, time);
+ 
++    uint32_t physicalMask = 0;
++    switch (event.rawKey().sym()) {
++    case FcitxKey_Shift_L: case FcitxKey_Shift_R: physicalMask = server_->stateMask_.shift_mask; break;
++    case FcitxKey_Control_L: case FcitxKey_Control_R: physicalMask = server_->stateMask_.control_mask; break;
++    case FcitxKey_Alt_L: case FcitxKey_Alt_R: physicalMask = server_->stateMask_.mod1_mask; break;
++    case FcitxKey_Super_L: case FcitxKey_Super_R: physicalMask = server_->stateMask_.mod4_mask; break;
++    default: break;
++    }
++    if (physicalMask) {
++        if (!physicalModifiersInitialized_) {
++            physicalDepressed_ = xkb_state_serialize_mods(server_->state_.get(), XKB_STATE_MODS_DEPRESSED);
++            physicalModifiersInitialized_ = true;
++        }
++        if (state == WL_KEYBOARD_KEY_STATE_RELEASED) physicalHeld_.erase(code);
++        else physicalHeld_[code] = physicalMask;
++        physicalDepressed_ &= ~physicalMask;
++        for (const auto &[heldCode, mask] : physicalHeld_) physicalDepressed_ |= mask;
++    }
++
+     if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == repeatKey_) {
+         timeEvent_->setEnabled(false);
+     } else if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+--- a/src/frontend/waylandim/waylandim.cpp
++++ b/src/frontend/waylandim/waylandim.cpp
+@@ -122,4 +122,4 @@
+ };
+ } // namespace fcitx
+ 
+-FCITX_ADDON_FACTORY_V2(waylandim, fcitx::WaylandIMModuleFactory);
++FCITX_ADDON_FACTORY_V2(aginowaylandim, fcitx::WaylandIMModuleFactory);

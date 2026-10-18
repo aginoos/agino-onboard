@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Only the X11 login entry uses this launcher; KWin owns Wayland startup.
+if [[ "${XDG_SESSION_TYPE:-}" == wayland || -n "${WAYLAND_DISPLAY:-}" ]];then exit 0;fi
+export FCITX_ADDON_DIRS="/usr/lib/agino-keyboard/fcitx5:/usr/lib/x86_64-linux-gnu/fcitx5"
+exec fcitx5 "$@"

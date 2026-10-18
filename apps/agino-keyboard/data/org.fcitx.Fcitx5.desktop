@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Fcitx5
+Exec=/usr/bin/agino-keyboard-fcitx-x11 --replace -d
+Icon=fcitx
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-AutoRestart=false

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Keyboard
+Name[zh_CN]=屏幕键盘
+Comment=Touchscreen keyboard with Fcitx5 input methods
+Exec=agino-keyboard
+Icon=agino-keyboard
+Terminal=false
+Categories=Utility;Accessibility;
+Actions=Settings;
+[Desktop Action Settings]
+Name=Settings
+Name[zh_CN]=设置
+Exec=agino-keyboard --settings

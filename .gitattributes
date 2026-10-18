@@ -1,0 +1,3 @@
+# Unified diff context lines contain a required single space.
+config/patches/*.patch whitespace=-blank-at-eol
+apps/agino-keyboard/patches/*.patch whitespace=-blank-at-eol

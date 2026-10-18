@@ -1,0 +1,9 @@
+{
+  "version": "0.1.21",
+  "sourceCommit": "2877f770c5cb48fdbf6c216bd726173fe9bf64f5",
+  "import": "keyboard-only snapshot",
+  "sourceFilesUnmodified": 345,
+  "extractionChanges": {
+    "tests/test_screen_keyboard.py": "Excluded only test_desktop_requires_keyboard_before_claiming_image: original distribution image build script is outside this keyboard-only repository."
+  }
+}

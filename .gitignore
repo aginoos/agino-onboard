@@ -1,0 +1,10 @@
+/sources/
+/out/
+*.deb
+*.buildinfo
+*.changes
+
+.gstack/
+__pycache__/
+
+/build/

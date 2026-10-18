@@ -1,0 +1,66 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"https://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+ <interface name="org.freedesktop.DBus.Peer">
+  <method name="Ping"/>
+  <method name="GetMachineId">
+   <arg type="s" name="machine_uuid" direction="out"/>
+  </method>
+ </interface>
+ <interface name="org.freedesktop.DBus.Introspectable">
+  <method name="Introspect">
+   <arg name="xml_data" type="s" direction="out"/>
+  </method>
+ </interface>
+ <interface name="org.freedesktop.DBus.Properties">
+  <method name="Get">
+   <arg name="interface_name" direction="in" type="s"/>
+   <arg name="property_name" direction="in" type="s"/>
+   <arg name="value" direction="out" type="v"/>
+  </method>
+  <method name="GetAll">
+   <arg name="interface_name" direction="in" type="s"/>
+   <arg name="props" direction="out" type="a{sv}"/>
+  </method>
+  <method name="Set">
+   <arg name="interface_name" direction="in" type="s"/>
+   <arg name="property_name" direction="in" type="s"/>
+   <arg name="value" direction="in" type="v"/>
+  </method>
+  <signal name="PropertiesChanged">
+   <arg type="s" name="interface_name"/>
+   <arg type="a{sv}" name="changed_properties"/>
+   <arg type="as" name="invalidated_properties"/>
+  </signal>
+ </interface>
+ <interface name="org.fcitx.Fcitx5.VirtualKeyboardBackend1">
+  <method name="NextPage">
+  </method>
+  <method name="PrevPage">
+  </method>
+  <method name="ProcessKeyEvent">
+   <arg type="u" direction="in"/>
+   <arg type="u" direction="in"/>
+   <arg type="u" direction="in"/>
+   <arg type="b" direction="in"/>
+   <arg type="u" direction="in"/>
+  </method>
+  <method name="ProcessVisibilityEvent">
+   <arg type="b" direction="in"/>
+  </method>
+  <method name="SelectCandidate">
+   <arg type="i" direction="in"/>
+  </method>
+  <method name="SetVirtualKeyboardFunctionMode">
+   <arg type="u" direction="in"/>
+  </method>
+ </interface>
+ <interface name="org.fcitx.Fcitx.VirtualKeyboard1">
+  <method name="HideVirtualKeyboard">
+  </method>
+  <method name="ShowVirtualKeyboard">
+  </method>
+  <method name="ToggleVirtualKeyboard">
+  </method>
+ </interface>
+</node>
