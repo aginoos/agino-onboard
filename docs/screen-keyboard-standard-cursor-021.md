@@ -46,3 +46,5 @@ Release构建成功，完整CTest为57/57通过、0失败、0跳过（393.03秒�
 隔离小窗口的光标增量不是完整输入流程的精确差值；整应用还受字体、分配器及其他进程的共享库分摊影响。恢复标准路径后接受实际内存开销，不再用自管光标或主动字体回收追原资源数字。
 
 0.1.21安装包989,824字节，Installed-Size3,236KiB；SHA-256为`83b62b8c133beb9c56fb5441148cd69c98de3496fcfb628918176f7c7abfc3ea`。8个ELF的依赖检查通过，包内md5sums全部通过；本机apt模拟仅升级agino-keyboard，0新增/0删除。Downloads交付deb、应用/仓库/完整源码、运行采样JSON、本文及SHA清单；完整源码绑定SOURCE-COMMIT并核验Fcitx/KWin原始归档SHA。安装后重启屏幕键盘使旧常驻程序切换版本。
+
+独立仓库说明：本文保留0.1.21发布时的验证事实；历史提交编号、out/和Downloads路径指原开发环境，不是本仓库附带产物。最新复测见 [内存报告](screen-keyboard-memory-remeasurement-021.md)。

@@ -74,8 +74,6 @@ add_test(NAME keyboard-deepin-shadow-scaled COMMAND xvfb-run -a -s "-screen 0 25
 set_tests_properties(keyboard-deepin-shadow keyboard-deepin-shadow-scaled PROPERTIES TIMEOUT 45)
 add_executable(rasterize-appicon EXCLUDE_FROM_ALL tools/rasterize-appicon.cpp)
 target_link_libraries(rasterize-appicon PRIVATE Qt6::Gui)
-add_executable(agino-keyboard-quick-ui EXCLUDE_FROM_ALL src/main.cpp src/preferences.h qml.qrc)
-target_link_libraries(agino-keyboard-quick-ui PRIVATE fcitx-client candidate-rows desktop-adapter key-sound panel-platform Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Dtk6::Declarative)
 add_library(idle-platform STATIC src/idleplatform.cpp)
 target_include_directories(idle-platform PUBLIC src)
 target_link_libraries(idle-platform PUBLIC Qt6::Core Qt6::DBus X11::X11 X11::Xi PkgConfig::WAYLAND)
@@ -200,7 +198,7 @@ if(AGINO_TEST_SOGOU)
  set_tests_properties(sogou-x11 sogou-wayland-native sogou-wayland-v3 sogou-xwayland PROPERTIES TIMEOUT 90 RESOURCE_LOCK agino-cpis-runtime)
 endif()
 
-# Native QtGui frontend; the Qt Quick executable remains an explicit reference target.
+# Production native QtGui frontend. QML is retained only by regression tests.
 add_executable(agino-keyboard-ui src/native-main.cpp src/preferences.h native.qrc
  src/native/nativepanel.cpp src/native/nativepanel.h src/native/nativeoutput.cpp src/native/nativecandidaterows.cpp src/native/nativecandidaterows.h src/native/nativepainting.cpp
  src/native/nativesettings.cpp src/native/nativesettings.h src/native/nativeaccessible.cpp)

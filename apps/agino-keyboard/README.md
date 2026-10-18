@@ -1,6 +1,6 @@
 # Agino 屏幕键盘
 
-当前0.1.21使用标准Qt光标处理；显示期间字体缓存正常复用。下方0.1.19的轻量光标和主动字体回收结果仅为历史记录。
+当前0.1.21使用标准Qt光标处理；显示期间字体缓存正常复用。
 
 DTK6 风格，默认完整数字行和可选 F1–F12，不显示独立标题栏。
 候选行固定显示：标准模式占 48、紧凑模式占 32 逻辑像素；有候选时展示 16（紧凑模式 13）逻辑像素连续文字，以空白分隔、按内容计宽，支持横向滑动。右端居中的矢量下箭头展开覆盖主键区，选择候选或再次点箭头还原。左侧常驻屏幕键盘应用图标，右侧、设置/候选下拉按钮之前显示 Fcitx 提供的输入法名称及语言，例如“中文：拼音”；安全输入时显示“安全输入”。切换输入法同步更新状态；紧凑模式只显示语言缩写，例如 CN、EN、JA、DE，缺少语言元数据时显示破折号，安全输入时显示“锁”。有候选时隐藏右侧状态并将其宽度交还候选词；不显示预编辑字母。
@@ -52,7 +52,7 @@ X11 使用 `agino-keyboard-fcitx-x11 --replace -d` 启动匹配的 Fcitx5；Wayl
 
 构建：仓库 `scripts/build-screen-keyboard.sh` 在隔离容器中构建和测试，输出独立 Debian 包。
 可指定 AGINO_KEYBOARD_BUILD_IMAGE 复用构建 SDK 镜像；已有输出拒绝覆盖。
-验收证据和未验证环境见 `docs/screen-keyboard-validation.md`。
+当前发布验证见 [0.1.21记录](../../docs/screen-keyboard-standard-cursor-021.md)，最新内存结果见 [复测报告](../../docs/screen-keyboard-memory-remeasurement-021.md)。
 
 自有代码 GPL-3.0-or-later；动态依赖 Qt6、DTK6、Fcitx5、KDE 框架与 libcanberra，
 各依赖许可证随发行版安装在 /usr/share/doc 对应软件包中；修改的 Fcitx 前端为 LGPL-2.1-or-later。
@@ -71,18 +71,10 @@ X11 专用入口只为该输入法进程优先加载本包的 XCB 兼容模块�
 
 X11 合成关闭时按面板的圆角轮廓设置原生窗口裁切，避免透明四角成为黑色；deepin 合成状态变化时自动更新，合成开启时保留透明抗锯齿边缘。Wayland 继续由透明 surface 绘制圆角。
 
-0.1.16 将 Slint 0.2.3 的全部已识别用户功能及修复回移到 Qt/DTK：副符号字号标准12/紧凑10，不透明度50–100（旧低值归一到50）；原生辅助功能动作与过期候选身份校验；设置选择器动态刷新；Fcitx控制器元数据独立重连与有界重试、翻页请求跨焦点失效；协商尺寸下浮动窗口保留下边。默认关闭声音时不加载音频库，首次有效按键播放时再加载 libcanberra。启动写入虚拟键盘开关采用保留其他内容的原子文件更新，写入失败会提示原因。移植范围及当前验证记录见 docs/screen-keyboard-slint-backport-20261013.md。
+## 当前实现
 
-0.1.17 将界面与常驻控制拆分：`bin/agino-keyboard` 仅使用 QtCore/DBus 和原生桌面协议；`libexec/agino-keyboard-ui` 保留原 DTK/QML 界面，普通运行使用 QGuiApplication，仅需要警告时按需运行 QWidget 对话框。系统快捷键使用现有 kglobalacceld 服务。界面退出前保存几何和大小写状态，启动失败不会无限重启，界面进程崩溃可再次呼出。锁定、安全输入和默认输入法策略由控制器统一管理；界面在策略确认和新快照到达前暂停发键。测量方式与实际结果见 docs/screen-keyboard-memory-20261017.md。
+`agino-keyboard` 是轻量常驻控制器，`agino-keyboard-ui` 使用 QtGui/QPainter 和 DTK 调色板绘制界面；警告对话框按需启动 `agino-keyboard-dialog`。隐藏后界面进程退出，再次呼出时重建；输入期间正常复用有界文字缓存，光标由 Qt 标准路径处理。
 
-应用图标使用原SVG通过固定DTK渲染器生成的1–192像素PNG资源，按实际DPR选择，避免运行时为一个小图标加载SVG渲染库（部分通用图像格式插件仍由Qt加载）；极端尺寸仍回退原SVG。修改SVG后，在匹配SDK中构建`rasterize-appicon`目标，再以`QT_QPA_PLATFORM=offscreen rasterize-appicon data/agino-keyboard.svg data/icons`重建资源，并检查缩放下的实际界面像素。Qt Quick参考前端及其测试需要QtQuick.Window模块。
+图标由 SVG 生成 1–192 像素 PNG，按实际 DPR 选择，避免普通尺寸下额外加载 SVG 渲染库。它们均被 native.qrc 引用。修改 SVG 后可构建 `rasterize-appicon` 并在匹配 SDK 中重新生成。
 
-0.1.18 继续优化显示态：嵌入图标通过显式 PNG image provider 解码，避免自动探测加载无关图片/视频编解码库；仅图标键创建 Canvas，普通按键文字使用轻量 Text。DTK 调色板、按键背景和事件处理保持原实现。显示态内存仍须统计控制器与界面进程合计，不能用轻量控制器数字代表整个应用。Slint 的分块输出/双缓冲实现与本轮测量结论见上述内存报告。
-
-0.1.19采用QtGui/QPainter原生前端，继续使用DTK系统调色板、字体和原生阴影。Qt Quick前端保留为`agino-keyboard-quick-ui`参考目标，显式构建用于回归；正式界面进程不直接链接Qt Quick/QML。提示对话框通过按需启动的`agino-keyboard-dialog`运行。X11采用约64KiB分带输出，Wayland直接使用Qt共享内存BackingStore；展开候选按可见范围惰性布局。连续输入期间保留有界文字缓存，空闲1秒后回收布局和Qt字体引擎；Qt升级必须重验字体缓存内部接口。原生虚拟无障碍控件保留按键、候选、设置及滑块动作，并验证过期身份。
-
-Wayland仅加载当前主题的静态箭头光标，保留热点，并响应主题、尺寸和屏幕变化。动画主题、服务端光标协议，以及无法确认的主题解析或混合/强制缩放，均使用Qt正常光标路径。完整应用对照中，X11/Wayland均匀1×/2×输出的USS/PSS各状态中位数达到Slint0.2.3水平，RSS仍较高。实际像素、功能回归、原始数据和适用边界见`docs/screen-keyboard-native-memory-20261017.md`；实施过程与未采用实验保留于`docs/screen-keyboard-native-memory-plan-20261017.md`。
-
-0.1.20按用户选择撤销显示期间空闲1秒后的主动文字/字体缓存回收和malloc_trim，恢复正常缓存复用。保留128KiB估算成本、最多128项的有界文字布局缓存，系统字体变化和面板销毁时正常失效；收起后的界面销毁/常驻控制器机制保留。0.1.19资源报告仅代表当时带主动回收的实现，不能沿用其空闲数字作为0.1.20结论。新的实测与RSS来源见`docs/screen-keyboard-font-cache-020.md`。
-
-0.1.21按用户选择移除轻量静态光标接管、专属主题解析/轮询/缩放判断和可选Xcursor动态加载，统一使用Qt标准光标处理。没有新增QtWayland补丁、定制Qt库或独立光标管理器。相关源码和探针从当前树移除，历史仍可在0.1.20源码包或Git提交62606600查看。新增真实Wayland1×/2×窗口用例，检查标准光标在显示、停顿、紧凑模式和重新显示后保持有效。详见`docs/screen-keyboard-standard-cursor-021.md`。
+`qml/`、`panelview.h` 和 `keyboardiconprovider.h` 仍用于现有 QML/窗口回归测试，正式程序不加载 QML；已删除未使用的旧 Qt Quick 应用入口。完整测试还覆盖原生设置、绘制、无障碍、候选选择、搜狗、X11 和 Wayland。
