@@ -9,7 +9,8 @@ void KeyboardState::updateModifiers(){quint32 m=(caps_?2:0)|(shiftLatched_?1:0);
 KeySpec KeyboardState::resolved(KeySpec k)const{
  k.modifiers|=modifiers_;
  if(k.sym>='a'&&k.sym<='z'){if(bool(k.modifiers&1)!=bool(k.modifiers&2))k.sym-=32;}
- else if(k.modifiers&3){const QByteArray plain="`1234567890-=[]\\;',./",shift="~!@#$%^&*()_+{}|:\"<>?";int n=plain.indexOf(char(k.sym));if(k.sym<128&&n>=0)k.sym=quint8(shift[n]);}
+ // Caps lock changes letters only, like a hardware Caps Lock; digits and punctuation take Shift.
+ else if(k.modifiers&1){const QByteArray plain="`1234567890-=[]\\;',./",shift="~!@#$%^&*()_+{}|:\"<>?";int n=plain.indexOf(char(k.sym));if(k.sym<128&&n>=0)k.sym=quint8(shift[n]);}
  return k;
 }
 void KeyboardState::updateClockNeeded(){bool needed=false;for(const auto &t:touches_)needed|=t.key.sym==0xff08;if(needed!=clockNeeded_){clockNeeded_=needed;emit clockNeededChanged(needed);}}

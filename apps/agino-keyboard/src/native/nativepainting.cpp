@@ -383,7 +383,7 @@ void NativePainting::key(QPainter &p,const NativeKey &k,const NativeStyle &style
         const QRectF iconRect(rect.left()+std::round(rect.width()/2)-12,rect.top()+std::round(rect.height()/2)-12,24,24);
         icon(p,iconRect,k.control.sym==0xff08?QStringLiteral("Backspace"):k.action,iconInk,style.compact?0.75:1);
     } else {
-        const QString label=locked?QStringLiteral("↑ Shift"):!status.isEmpty()?status:(!k.secondary.isEmpty()&&(modifiers&3))?k.secondary:k.label;
+        const QString label=locked?QStringLiteral("↑ Shift"):!status.isEmpty()?status:(!k.secondary.isEmpty()&&(modifiers&1))?k.secondary:k.label;   // caps lock: letters only, see KeyboardState::resolved
         QFont font=style.font;font.setPixelSize(k.label.size()>3?(style.compact?12:14):(style.compact?14:18));
         p.save();p.setOpacity(p.opacity()*(enabled?1:0.4));text(p,rect,label,font,ink);p.restore();
     }
