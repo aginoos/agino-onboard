@@ -48,12 +48,13 @@ public:
  ~XlibBackend()override{if(display_)XCloseDisplay(display_);}
  bool ready()const{return display_;}
  bool focusAccepts()override{
-  const bool accepted=focusInSession();
+  const char *reason=focusInSession();
+  const bool accepted=!reason;
   // One line when the verdict is first known and when it changes (no line per key, never the key).
-  if(int(accepted)!=verdict_){
-   verdict_=int(accepted);
-   std::fprintf(stderr,accepted?"agino-keyboard-embed: the input focus is in the window of the session program, keys are sent\n"
-                              :"agino-keyboard-embed: the input focus is not in the window of the session program, keys are dropped\n");
+  if(!known_||reason!=verdict_){
+   known_=true;verdict_=reason;
+   if(accepted)std::fprintf(stderr,"agino-keyboard-embed: the input focus is in the window of the session program, keys are sent\n");
+   else std::fprintf(stderr,"agino-keyboard-embed: keys are dropped (%s)\n",reason);
   }
   return accepted;
  }
@@ -111,14 +112,18 @@ private:
  // (the focused window may be a child, a focus proxy or a popup of it). Not the keyboard itself, no other program.
  // Not embedded yet the top-level of the keyboard is itself: nothing outside it matches by the tree, only by the pid
  // (the keyboard is off screen then, so nobody can press a key; the same rule needs no special case).
- bool focusInSession()const{
+ // Why the keys are not sent, or null when the input focus is in the window of the session program.
+ const char *focusInSession()const{
   Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
-  if(focus==None||focus==PointerRoot)return false;
+  if(focus==None)return "no window has the input focus";
+  if(focus==PointerRoot)return "the input focus follows the pointer";
   const QList<quint32> own=chainUp(Window(own_)),at=chainUp(focus);
-  if(own.isEmpty()||at.isEmpty()||FocusGuard::isOwn(own,at))return false;
-  return FocusGuard::sameToplevel(own,at)||FocusGuard::pidMatches(pidsOf(at),session_);
+  if(own.isEmpty()||at.isEmpty())return "the window tree could not be read";
+  if(FocusGuard::isOwn(own,at))return "the input focus is in the keyboard itself";
+  if(FocusGuard::sameToplevel(own,at)||FocusGuard::pidMatches(pidsOf(at),session_))return nullptr;
+  return "the input focus is in a window of another program";
  }
- WId own_;pid_t session_;Display *display_;int verdict_=-1;   // verdict_: -1 none yet, else the last answer
+ WId own_;pid_t session_;Display *display_;const char *verdict_=nullptr;bool known_=false;   // verdict_: the reason of the last answer (null: accepted)
 };
 
 int signalPipe[2]={-1,-1};

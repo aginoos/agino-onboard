@@ -15,6 +15,7 @@
 #include <fcitx-utils/log.h>
 #include <unistd.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -97,7 +98,7 @@ public:
  }
  void notify(){const auto s=getSnapshot();lastEditable_=std::get<2>(s);lastSensitive_=std::get<3>(s);changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));}
  // Caller authentication: state-changing methods accept only the keyboard programs of the same user (the bus daemon vouches for uid and pid).
- bool trustedUid(const std::string &sender){return busCredential("GetConnectionUnixUser",sender)==getuid();}
+ bool trustedUid(const std::string &sender){return busCredential("GetConnectionUnixUser",sender)==geteuid();}
  uint64_t busCredential(const char *member,const std::string &sender){
   auto msg=bus_.createMethodCall("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus",member);msg<<sender;
   auto reply=msg.call(500000);uint32_t value=0;
@@ -116,9 +117,14 @@ public:
   const auto sender=currentMessage()?currentMessage()->sender():std::string();
   if(sender.empty())return false;
   if(trusted_.count(sender))return true;
+  // A refused name is not asked again for a moment: a flood of calls must not cost fcitx5 two round trips each.
+  const auto now=std::chrono::steady_clock::now();
+  const auto refused=denied_.find(sender);
+  if(refused!=denied_.end()&&now<refused->second)return false;
   const auto pid=busCredential("GetConnectionUnixProcessID",sender);
   if(trustedUid(sender)&&(testHooks_||(pid!=~uint64_t(0)&&trustedExe(pid)))){trusted_.insert(sender);return true;}
-  if(denied_.insert(sender).second)FCITX_WARN()<<"agino-keyboard: rejected a call from untrusted bus name "<<sender<<" (pid "<<pid<<")";
+  if(refused==denied_.end())FCITX_WARN()<<"agino-keyboard: rejected a call from untrusted bus name "<<sender<<" (pid "<<pid<<")";
+  denied_[sender]=now+std::chrono::seconds(2);
   return false;
  }
  bool sendKey(uint32_t sym,uint32_t code,uint32_t mods,bool release,uint64_t epoch){
@@ -231,7 +237,7 @@ private:
  std::shared_ptr<CandidateList> lastList_;std::string lastPreedit_;std::vector<const CandidateWord*> lastWords_;std::vector<std::string> lastTexts_;
  Instance *instance_;dbus::Bus bus_;TrackableObjectReference<InputContext> focusRef_;uint64_t epoch_=1,candidate_=1;bool safe_=false,suspended_=false,lastEditable_=false,lastSensitive_=false;int limit_=128;struct HeldKey {Key key;bool forwarded;bool engine;std::string sender;};std::map<uint32_t,HeldKey> held_;
  std::unique_ptr<dbus::Slot> ownerWatch_;
- std::unordered_set<std::string> trusted_,denied_;std::vector<std::string> allowed_;bool testHooks_=false;
+ std::unordered_set<std::string> trusted_;std::map<std::string,std::chrono::steady_clock::time_point> denied_;std::vector<std::string> allowed_;bool testHooks_=false;
  std::unique_ptr<SogouPanel> sogou_;
  std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>> handlers_;
 };
