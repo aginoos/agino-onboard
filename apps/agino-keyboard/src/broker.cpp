@@ -193,6 +193,10 @@ static void errorDialog(const QString &message){
 int main(int argc,char **argv){
  QCoreApplication app(argc,argv);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");AginoI18n::install(app);
  bool hidden=false,settings=false;QString capture;for(int i=1;i<argc;++i){QByteArray a(argv[i]);hidden|=a=="--hidden";settings|=a=="--settings";if(a=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))capture=QString::fromLocal8Bit(argv[++i]);}
+ // Started again after the session ended (the autostart restarts on failure): there is nothing to do, and 2 ends
+ // the restarts (RestartPreventExitStatus=2); a keyboard that kept running would start kglobalaccel without a display.
+ if(!IdlePlatform::displayAvailable()){qCWarning(lcController(),"Cannot open the X11 display (the session has ended?), exiting");return 2;}
+ IdlePlatform::exitWithDisplay(2);
  auto bus=QDBusConnection::sessionBus();
  if(!bus.registerService(publicService)){
   // Another instance runs: ask it to show the keyboard, but only when it is the controller (SEC-10); anything else holding the name gets nothing.

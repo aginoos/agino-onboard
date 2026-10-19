@@ -20,6 +20,7 @@
 #include "log.h"
 #include <QVariantMap>
 #include <cmath>
+#include <unistd.h>
 #include <wayland-client.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XInput2.h>
@@ -202,9 +203,13 @@ bool IdlePlatform::Private::handleMessage(const QDBusMessage &m,const QDBusConne
  }else return false;
  connection.send(m.createReply(result));return true;
 }
+static bool waylandSession(){const auto platform=qgetenv("QT_QPA_PLATFORM");return platform.startsWith("wayland")||(platform.isEmpty()&&(qgetenv("XDG_SESSION_TYPE")=="wayland"||!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")));}
+bool IdlePlatform::displayAvailable(){if(waylandSession())return true;auto display=XOpenDisplay(nullptr);if(display)XCloseDisplay(display);return display;}
+static int displayExitStatus=1;
+void IdlePlatform::exitWithDisplay(int status){displayExitStatus=status;XSetIOErrorHandler([](Display *)->int{qCInfo(lcSession())<<"The X11 display is gone, the session has ended";_exit(displayExitStatus);});}
 IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<Private>(this)){
  qDBusRegisterMetaType<TrayPixmap>();qDBusRegisterMetaType<QList<TrayPixmap>>();qDBusRegisterMetaType<TrayTooltip>();qDBusRegisterMetaType<MenuGroup>();qDBusRegisterMetaType<QList<MenuGroup>>();qDBusRegisterMetaType<MenuLayout>();
- const auto platform=qgetenv("QT_QPA_PLATFORM");d->wl=platform.startsWith("wayland")||(platform.isEmpty()&&(qgetenv("XDG_SESSION_TYPE")=="wayland"||!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")));
+ d->wl=waylandSession();
  auto bus=d->bus;
  bus.connect(session,"/org/deepin/dde/SessionManager1",session,"LockedChanged",this,SLOT(lock(bool,QDBusMessage)));
  bus.connect("org.freedesktop.ScreenSaver","/ScreenSaver","org.freedesktop.ScreenSaver","ActiveChanged",this,SLOT(screensaver(bool,QDBusMessage)));

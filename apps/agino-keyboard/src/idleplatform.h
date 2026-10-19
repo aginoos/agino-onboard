@@ -15,6 +15,11 @@ public:
  QString shortcutError() const;
  void setShortcut(QString);
  static int parseShortcut(const QString &);
+ // X11: false when the display cannot be opened (started again after the session ended); Wayland: true.
+ static bool displayAvailable();
+ // X11: end the process with STATUS when the connection to the display breaks (the session ends), instead of
+ // Xlib's exit status 1, which a restart policy (Restart=on-failure) would take for a crash.
+ static void exitWithDisplay(int status);
 signals:
  void sourceChanged(int kind,double x,double y);
  void lockedChanged(bool);
