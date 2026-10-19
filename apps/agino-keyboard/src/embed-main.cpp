@@ -87,6 +87,7 @@ int main(int argc,char **argv){
  // preferences of the desktop keyboard is used (different application name, own settings file).
  prefs.setCompact(true);prefs.setFunctionRow(false);prefs.setMode(KeyboardState::Manual);prefs.setSafeInput(false);
  FcitxClient client;
+ client.setStandalone(true);
  KeyboardState state;
  state.setMode(KeyboardState::Manual);
  state.setContext(1,true,false);   // there is always a target: the focused window

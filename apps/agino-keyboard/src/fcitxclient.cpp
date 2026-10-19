@@ -26,6 +26,7 @@ FcitxClient::FcitxClient(QObject *p):QObject(p){
 void FcitxClient::clear(){++pageRevision_;++generation_;++namesRevision_;reconnectTimer_.start();appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("等待 Fcitx5 屏幕键盘插件");emit changed();}
 void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){++generation_;clear();if(!owner.isEmpty())refresh();}
 void FcitxClient::refresh(){
+ if(standalone_)return;
  const auto gen=generation_,policy=appliedPolicyRevision_;auto bus=QDBusConnection::sessionBus();
  auto m=QDBusMessage::createMethodCall(service,path,service,"GetSnapshot");m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(bus.asyncCall(m,1500),this);
