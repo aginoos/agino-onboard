@@ -1,6 +1,19 @@
 [Desktop Entry]
 Type=Application
 Name=Agino Screen Keyboard
+Name[ar]=لوحة مفاتيح Agino على الشاشة
+Name[de]=Agino-Bildschirmtastatur
+Name[es]=Teclado en pantalla de Agino
+Name[fr]=Clavier à l'écran Agino
+Name[it]=Tastiera su schermo di Agino
+Name[ja]=Agino スクリーンキーボード
+Name[ko]=Agino 화상 키보드
+Name[pt_BR]=Teclado virtual do Agino
+Name[ru]=Экранная клавиатура Agino
+Name[uk]=Екранна клавіатура Agino
+Name[zh_CN]=Agino 屏幕键盘
+Name[zh_TW]=Agino 螢幕鍵盤
+Name[zh_HK]=Agino 螢幕鍵盤
 Exec=agino-keyboard --hidden
 Icon=agino-keyboard
 OnlyShowIn=Deepin;DDE;
