@@ -17,6 +17,7 @@
 #include <QSet>
 #include <QTimer>
 #include <csignal>
+#include <fcntl.h>
 #include <cstdio>
 #include <sys/prctl.h>
 #include <unistd.h>
@@ -37,26 +38,37 @@ namespace {
 class KeySender {
 public:
  explicit KeySender(WId own):own_(own),display_(XOpenDisplay(nullptr)){}
- ~KeySender(){if(display_)XCloseDisplay(display_);}
+ ~KeySender(){releaseAll();if(display_)XCloseDisplay(display_);}
  KeySender(const KeySender&)=delete;KeySender &operator=(const KeySender&)=delete;
  bool ready()const{return display_;}
  void send(KeySpec k,bool release){
   if(!display_)return;
-  Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
-  // Nothing has the focus, or it is the keyboard itself (it never takes the focus, but never send to it).
-  if(focus==None||focus==PointerRoot||focus==Window(own_))return;
   const KeyCode code=k.code?KeyCode(k.code):XKeysymToKeycode(display_,k.sym);
   if(!code)return;
   const bool shiftKey=k.sym==XK_Shift_L||k.sym==XK_Shift_R;
   if(shiftKey)shiftHeld_=!release;
+  if(release){
+   // The release of a key that was sent is always sent, wherever the focus is now: a key left down in the
+   // X server would repeat and stay down in the session that starts next.
+   if(down_.remove(code)){fake(code,false);if(wrapped_.remove(code))fake(shiftCode(),false);XFlush(display_);}
+   return;
+  }
+  Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
+  // Nothing has the focus, or it is the keyboard itself (it never takes the focus, but never send to it).
+  if(focus==None||focus==PointerRoot||focus==Window(own_))return;
   // A latched Shift (single tap, caps lock) only changes the symbol the keyboard sends, there is no Shift
   // key event: the key then needs a Shift of its own around it.
-  if(!release&&!shiftKey&&!shiftHeld_&&needsShift(code,k.sym)){
+  if(!shiftKey&&!shiftHeld_&&needsShift(code,k.sym)){
    fake(shiftCode(),true);wrapped_.insert(code);
   }
-  fake(code,!release);
-  if(release&&wrapped_.remove(code))fake(shiftCode(),false);
+  fake(code,true);down_.insert(code);
   XFlush(display_);
+ }
+ // Releases every key that is still down (the program ends, the keyboard is closed).
+ void releaseAll(){
+  if(!display_)return;
+  for(const KeyCode code:std::as_const(down_)){fake(code,false);if(wrapped_.contains(code))fake(shiftCode(),false);}
+  down_.clear();wrapped_.clear();XFlush(display_);
  }
 private:
  KeyCode shiftCode()const{return XKeysymToKeycode(display_,XK_Shift_L);}
@@ -65,8 +77,11 @@ private:
   return sym!=plain&&sym==shifted;
  }
  void fake(KeyCode code,bool press){if(code)XTestFakeKeyEvent(display_,code,press,CurrentTime);}
- WId own_;Display *display_;bool shiftHeld_=false;QSet<KeyCode> wrapped_;
+ WId own_;Display *display_;bool shiftHeld_=false;QSet<KeyCode> down_,wrapped_;
 };
+
+int signalPipe[2]={-1,-1};
+void onSignal(int){const char byte=1;if(write(signalPipe[1],&byte,1)<0){}}
 }
 
 int main(int argc,char **argv){
@@ -75,8 +90,13 @@ int main(int argc,char **argv){
  qunsetenv("WAYLAND_SOCKET");
  // The login and lock screens run on X11 (the keyboard is embedded by window id).
  qputenv("QT_QPA_PLATFORM","xcb");
- // Die with the process that started us (the session program), like the Fcitx keyboard UI does.
+ // Die with the process that started us (the session program), like the Fcitx keyboard UI does. The signal
+ // ends the program through the event loop (below), so that the keys that are still down are released.
  prctl(PR_SET_PDEATHSIG,SIGTERM);
+ if(pipe2(signalPipe,O_CLOEXEC|O_NONBLOCK)==0){
+  struct sigaction action{};action.sa_handler=onSignal;sigemptyset(&action.sa_mask);
+  for(const int number:{SIGTERM,SIGINT,SIGHUP})sigaction(number,&action,nullptr);
+ }
  StartupDpiPolicy dpiPolicy;
  QGuiApplication app(argc,argv);
  dpiPolicy.restore();
@@ -106,6 +126,8 @@ int main(int argc,char **argv){
  QObject::connect(&clock,&QTimer::timeout,&state,[&]{state.advanceClock(elapsed.elapsed());});
  clock.start();
  QObject::connect(&app,&QCoreApplication::aboutToQuit,&state,&KeyboardState::cancelAll);
+ // The panel has a Hide key; here it would leave a window that rejects all input (no way to show it again).
+ QObject::connect(&state,&KeyboardState::visibleChanged,&state,[&state](bool visible){if(!visible)QTimer::singleShot(0,&state,[&state]{state.manualShow();});});
 
  state.manualShow();
  panel.show();
@@ -113,6 +135,8 @@ int main(int argc,char **argv){
  std::printf("%llu\n",static_cast<unsigned long long>(panel.winId()));
  std::fflush(stdout);
 
+ QSocketNotifier signalNotifier(signalPipe[0],QSocketNotifier::Read);
+ QObject::connect(&signalNotifier,&QSocketNotifier::activated,&app,[&app]{char buffer[16];if(read(signalPipe[0],buffer,sizeof(buffer))>=0)app.quit();});
  // The end of the standard input (the session program closed the process) ends the program.
  QSocketNotifier input(STDIN_FILENO,QSocketNotifier::Read);
  QObject::connect(&input,&QSocketNotifier::activated,&app,[&app]{char buffer[64];if(read(STDIN_FILENO,buffer,sizeof(buffer))<=0)app.quit();});
