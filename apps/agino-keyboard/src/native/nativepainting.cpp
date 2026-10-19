@@ -38,7 +38,7 @@ void softwareRectangle(QPainter &p,const QRectF &rect,QColor color,qreal request
     if(radius>0) {
         for(const Corner &c:corners) if(c.color==color&&c.border==border&&c.radius==radius&&c.bw==bw&&qFuzzyCompare(c.dpr,dpr)) {image=&c.image;break;}
         if(!image) {
-            if(corners.size()>=12) corners.clear();
+            if(corners.size()>=32) corners.clear();
             QImage atlas(QSize(qRound(radius*2*dpr),qRound(radius*2*dpr)),QImage::Format_ARGB32_Premultiplied);
             atlas.setDevicePixelRatio(dpr);atlas.fill(Qt::transparent);
             QPainter cp(&atlas);cp.setRenderHint(QPainter::Antialiasing);cp.setCompositionMode(QPainter::CompositionMode_Source);

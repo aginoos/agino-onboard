@@ -81,7 +81,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
  updateIcon();qreal is=compact?18:24;p.save();p.setRenderHint(QPainter::Antialiasing,false);p.setRenderHint(QPainter::SmoothPixmapTransform,true);p.drawImage(QRectF(bx+4,(ch-is)/2,is,is),icon_);p.restore();
  const bool hasWords=!words_.isEmpty()&&!input_.sensitive();
  QRectF toolbarAction(bx+bw-ch,0,ch,ch);
- NativeControl action;action.id=hasWords?"expandButton":"settingsButton";action.name=hasWords?(expanded_?QCoreApplication::translate("Keyboard","Collapse candidates"):QCoreApplication::translate("Keyboard","Expand candidates")):QCoreApplication::translate("Keyboard","Settings");action.action=hasWords?"expand":"settings";action.rect=toolbarAction;action.checked=expanded_;action.enabled=dragOwner_==NoOwner;addControl(action);
+ NativeControl action;action.id=hasWords?"expandButton":"settingsButton";action.name=hasWords?(expanded_?QCoreApplication::translate("Keyboard","Collapse candidates"):QCoreApplication::translate("Keyboard","Expand candidates")):QCoreApplication::translate("Keyboard","Settings");action.action=hasWords?"expand":"settings";action.rect=toolbarAction;action.checked=expanded_;action.enabled=dragOwner_==NoOwner;if(hasWords||!embedded_)addControl(action);
  if(hasWords){
   if(expanded_){bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==action.id&&!contact.moving;const int lightness=held?-10:(hovered_==action.id?10:0);const QColor checked=DGuiApplicationHelper::adjustColor(pal.highlight().color(),0,0,lightness,0,0,0,0);NativePainting::rectangle(p,toolbarAction,checked,8);}
   qreal scale=(!expanded_&&hovered_==action.id)?1.1:1;
@@ -102,7 +102,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
   }
   p.restore();
   NativeControl list;list.id="candidate-list";list.name=QCoreApplication::translate("Keyboard","Candidates");list.action="scroll/candidates";list.role=QAccessible::List;list.context=candidateContext_;list.generation=candidateGeneration_;list.rect=clip;list.enabled=dragOwner_==NoOwner;addControl(list);
- }else{
+ }else if(!embedded_){
   const QString label=compact?(input_.sensitive()?QCoreApplication::translate("Keyboard","Lock"):input_.inputLanguageCode().isEmpty()?QStringLiteral("—"):input_.inputLanguageCode()):input_.inputMethodStatus();QFont font=pixels(st.font,compact?13:14);qreal width=qMin(qreal(qCeil(NativePainting::textSize(label,font).width())),bw*.35);
   p.save();p.setOpacity(opacity*.75);NativePainting::text(p,QRectF(toolbarAction.x()-6-width,0,width,ch),label,font,pal.windowText().color(),Qt::AlignRight|Qt::AlignVCenter,false,true,true);p.restore();
   bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==action.id&&!contact.moving;
@@ -111,7 +111,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
  }
  {
   const auto keys=NativePainting::keys(sz,compact,functionRow_);
-  for(auto key:keys){bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==key.control.id&&!contact.moving&&!contact.alternative;
+  for(auto key:keys){if(embedded_&&!key.action.isEmpty())continue;bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==key.control.id&&!contact.moving&&!contact.alternative;
    bool enabled=!expanded_&&(input_.editable()||!key.action.isEmpty()||key.control.id=="key-Space");NativePainting::key(p,key,st,state_.modifiers(),held,enabled,key.control.id=="key-Space"?input_.status():QString());
    key.control.enabled=enabled&&dragOwner_==NoOwner;key.control.pressed=held||((key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3));key.control.checked=(key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3);key.control.checkable=key.control.sym==0xffe1||key.control.sym==0xffe2;if(key.control.checked&&(state_.modifiers()&2))key.control.name=QCoreApplication::translate("Keyboard","Shift (Caps Lock)");if(!expanded_)addControl(key.control);
   }
@@ -182,7 +182,8 @@ void NativePanel::pointerMove(int id,QPointF local,QPointF global){
  if(contact.moving&&dragOwner_==id)emit moveRequested(delta.x(),delta.y());
  else if(contact.scrolling){if(picker)settings_.scroll(-delta.y());else scroll(contact.scrollArea,contact.scrollArea=="expanded"?-delta.y():-delta.x());}
  if(contacts_.contains(id))contacts_[id].previousGlobal=global;
- requestUpdate();
+ // A finger that only trembles on a key changes nothing on the screen.
+ if(contact.moving||contact.scrolling||contact.suppressed)requestUpdate();
 }
 void NativePanel::pointerEnd(int id,QPointF local,bool canceled){auto it=contacts_.find(id);if(it==contacts_.end())return;const Contact contact=it.value();contacts_.erase(it);scheduleHold();if(dragOwner_!=NoOwner&&dragOwner_!=id){if(contact.control.sym)state_.release(id,false);return;}
  if(contact.moving){if(dragOwner_==id)dragOwner_=NoOwner;}
@@ -212,7 +213,7 @@ void NativePanel::activate(const NativeControl &c,QPointF position){if(!state_.v
  if(c.action=="settings"){state_.cancelAll();alternatives_.clear();emit settingsRequested();return;}
  if(c.action=="expand"){setExpanded(!expanded_);return;}
  if(c.action=="Language"){if(!state_.inputAllowed()||!input_.editable()||input_.sensitive())return;state_.cancelAll();auto methods=input_.inputMethods();if(methods.size()>1)input_.setInputMethod(methods[(methods.indexOf(input_.inputMethod())+1)%methods.size()]);return;}
- if(c.action=="Hide"){setExpanded(false);state_.closePanel();return;}
+ if(c.action=="Hide"){if(embedded_)return;setExpanded(false);state_.closePanel();return;}
  if(c.action=="alternative"&&c.context==input_.contextEpoch()&&c.generation==alternativeGeneration_&&c.index>=0&&c.index<alternatives_.size()&&c.value.toString()==alternatives_[c.index]){auto cp=c.value.toString().toUcs4();if(!cp.isEmpty()){state_.press(-500,0x1000000+cp[0]);state_.release(-500,true);}alternatives_.clear();return;}
  if(c.sym&&state_.inputAllowed()){state_.press(-1000000,c.sym);state_.release(-1000000,true);}
 }

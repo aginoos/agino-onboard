@@ -7,16 +7,15 @@
 //  - no Fcitx5: the greeter has none, the lock screen has the input method of the user session, but the
 //    password field is the only target. The keys are sent as X11 key events (XTest) to the window that has
 //    the input focus, like a physical keyboard;
-//  - no session services: no D-Bus name, no tray icon, no shortcut, so it never collides with the
-//    keyboard of the user session;
-//  - the compact layout, always shown, never dismissed, no settings page.
-// It exits when its standard input is closed or its parent process ends.
-#include <QElapsedTimer>
+//  - no session services: no D-Bus name, no session bus, no tray icon, no shortcut, so it never collides with
+//    the keyboard of the user session;
+//  - the compact layout, always shown, never dismissed, no settings page, no files written.
+// It exits when its standard input is closed, when its parent process ends or on SIGTERM/SIGINT/SIGHUP.
 #include <QGuiApplication>
 #include <QSocketNotifier>
-#include <QSet>
 #include <QTimer>
 #include <csignal>
+#include <cerrno>
 #include <fcntl.h>
 #include <cstdio>
 #include <sys/prctl.h>
@@ -24,6 +23,7 @@
 #include "keyboardstate.h"
 #include "fcitxclient.h"
 #include "i18n.h"
+#include "keysender.h"
 #include "preferences.h"
 #include "startupdpi.h"
 #include "native/nativepanel.h"
@@ -34,57 +34,44 @@
 #include <X11/extensions/XTest.h>
 
 namespace {
-// Sends the keys of the keyboard to the focused window as X11 key events.
-class KeySender {
+// KeyBackend on the X server of the session (its own connection, the Qt one is XCB).
+class XlibBackend final:public KeyBackend {
 public:
- explicit KeySender(WId own):own_(own),display_(XOpenDisplay(nullptr)){}
- ~KeySender(){releaseAll();if(display_)XCloseDisplay(display_);}
- KeySender(const KeySender&)=delete;KeySender &operator=(const KeySender&)=delete;
+ explicit XlibBackend(WId own):own_(own),display_(XOpenDisplay(nullptr)){
+  int event=0,error=0,major=0,minor=0;
+  if(display_&&!XTestQueryExtension(display_,&event,&error,&major,&minor)){XCloseDisplay(display_);display_=nullptr;}
+ }
+ ~XlibBackend()override{if(display_)XCloseDisplay(display_);}
  bool ready()const{return display_;}
- void send(KeySpec k,bool release){
-  if(!display_)return;
-  const KeyCode code=k.code?KeyCode(k.code):XKeysymToKeycode(display_,k.sym);
-  if(!code)return;
-  const bool shiftKey=k.sym==XK_Shift_L||k.sym==XK_Shift_R;
-  if(shiftKey)shiftHeld_=!release;
-  if(release){
-   // The release of a key that was sent is always sent, wherever the focus is now: a key left down in the
-   // X server would repeat and stay down in the session that starts next.
-   if(down_.remove(code)){fake(code,false);if(wrapped_.remove(code))fake(shiftCode(),false);XFlush(display_);}
-   return;
-  }
+ bool focusAccepts()override{
   Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
   // Nothing has the focus, or it is the keyboard itself (it never takes the focus, but never send to it).
-  if(focus==None||focus==PointerRoot||focus==Window(own_))return;
-  // A latched Shift (single tap, caps lock) only changes the symbol the keyboard sends, there is no Shift
-  // key event: the key then needs a Shift of its own around it.
-  if(!shiftKey&&!shiftHeld_&&needsShift(code,k.sym)){
-   fake(shiftCode(),true);wrapped_.insert(code);
-  }
-  fake(code,true);down_.insert(code);
-  XFlush(display_);
+  return focus!=None&&focus!=PointerRoot&&focus!=Window(own_);
  }
- // Releases every key that is still down (the program ends, the keyboard is closed).
- void releaseAll(){
-  if(!display_)return;
-  for(const KeyCode code:std::as_const(down_)){fake(code,false);if(wrapped_.contains(code))fake(shiftCode(),false);}
-  down_.clear();wrapped_.clear();XFlush(display_);
- }
+ quint8 keycodeFor(quint32 sym)override{return quint8(XKeysymToKeycode(display_,sym));}
+ quint32 keysymAt(quint8 code,int level)override{return quint32(XkbKeycodeToKeysym(display_,code,group(),level));}
+ bool capsLockOn()override{XkbStateRec state{};return XkbGetState(display_,XkbUseCoreKbd,&state)==Success&&(state.locked_mods&LockMask);}
+ void fake(quint8 code,bool press)override{if(code)XTestFakeKeyEvent(display_,code,press,CurrentTime);}
+ void flush()override{XFlush(display_);}
 private:
- KeyCode shiftCode()const{return XKeysymToKeycode(display_,XK_Shift_L);}
- bool needsShift(KeyCode code,quint32 sym)const{
-  const KeySym plain=XkbKeycodeToKeysym(display_,code,0,0),shifted=XkbKeycodeToKeysym(display_,code,0,1);
-  return sym!=plain&&sym==shifted;
- }
- void fake(KeyCode code,bool press){if(code)XTestFakeKeyEvent(display_,code,press,CurrentTime);}
- WId own_;Display *display_;bool shiftHeld_=false;QSet<KeyCode> down_,wrapped_;
+ // The group of the keyboard (layout) the server uses for the next key event.
+ int group()const{XkbStateRec state{};return XkbGetState(display_,XkbUseCoreKbd,&state)==Success?state.group:0;}
+ WId own_;Display *display_;
 };
 
 int signalPipe[2]={-1,-1};
 void onSignal(int){const char byte=1;if(write(signalPipe[1],&byte,1)<0){}}
+// A protocol error of the X server must not end the program with the default Xlib handler.
+int ignoreXError(Display *,XErrorEvent *){return 0;}
+// The standard descriptors are open: otherwise the first descriptor Qt or Xlib opens would become fd 0 and the
+// notifier on the standard input would read the X protocol.
+void keepStandardDescriptors(){
+ for(int fd=0;fd<=2;++fd)if(fcntl(fd,F_GETFD)<0&&errno==EBADF){const int opened=open("/dev/null",O_RDWR);if(opened>fd)close(opened);}
+}
 }
 
 int main(int argc,char **argv){
+ keepStandardDescriptors();
  // The panel has no editable control: no input context.
  qputenv("QT_IM_MODULE","compose");
  qunsetenv("WAYLAND_SOCKET");
@@ -92,11 +79,14 @@ int main(int argc,char **argv){
  qputenv("QT_QPA_PLATFORM","xcb");
  // Die with the process that started us (the session program), like the Fcitx keyboard UI does. The signal
  // ends the program through the event loop (below), so that the keys that are still down are released.
+ const pid_t parent=getppid();
  prctl(PR_SET_PDEATHSIG,SIGTERM);
+ if(getppid()!=parent)return 0;   // the parent ended before the signal was set up
  if(pipe2(signalPipe,O_CLOEXEC|O_NONBLOCK)==0){
   struct sigaction action{};action.sa_handler=onSignal;sigemptyset(&action.sa_mask);
   for(const int number:{SIGTERM,SIGINT,SIGHUP})sigaction(number,&action,nullptr);
  }
+ XSetErrorHandler(ignoreXError);
  StartupDpiPolicy dpiPolicy;
  QGuiApplication app(argc,argv);
  dpiPolicy.restore();
@@ -104,29 +94,32 @@ int main(int argc,char **argv){
  app.setOrganizationName("agino");app.setApplicationName("agino-keyboard-embed");app.setApplicationDisplayName(QCoreApplication::translate("Keyboard","Screen Keyboard"));
  app.setQuitOnLastWindowClosed(false);
 
- Preferences prefs;
- // Fixed look: the compact layout (524 x 208) fits the 600 x 200 of the lock screen; nothing from the user's own
- // preferences of the desktop keyboard is used (different application name, own settings file).
+ // Fixed look: the compact layout (524 x 208) fits the 600 x 200 of the lock screen. The settings are only in memory:
+ // nothing of the keyboard of the desktop session is used and nothing is written (the home of the greeter is lightdm's).
+ Preferences prefs(nullptr,true);
  prefs.setCompact(true);prefs.setFunctionRow(false);prefs.setMode(KeyboardState::Manual);prefs.setSafeInput(false);
- FcitxClient client;
- client.setStandalone(true);
+ FcitxClient client(nullptr,true);
  KeyboardState state;
  state.setMode(KeyboardState::Manual);
+ state.useWallClock();
  state.setContext(1,true,false);   // there is always a target: the focused window
  NativePanel panel(prefs,client,state);
+ panel.setEmbedded(true);
  panel.setFlags(Qt::FramelessWindowHint|Qt::X11BypassWindowManagerHint|Qt::WindowDoesNotAcceptFocus);
  const int height=panel.minimumHeight(),width=524;
  panel.setMinimumSize(QSize(width,height));panel.resize(width,height);
- panel.setPosition(-3000,-3000);   // mapped off screen until the session program reparents it
+ panel.setPosition(-30000,-30000);   // mapped off screen until the session program reparents it
 
- KeySender keys(panel.winId());
- if(!keys.ready()){std::fprintf(stderr,"agino-keyboard-embed: cannot open the X11 display\n");return 2;}
- QObject::connect(&state,&KeyboardState::keyRequested,&app,[&keys](KeySpec k,bool release){keys.send(k,release);});
- QTimer clock;clock.setInterval(16);QElapsedTimer elapsed;elapsed.start();
- QObject::connect(&clock,&QTimer::timeout,&state,[&]{state.advanceClock(elapsed.elapsed());});
- clock.start();
+ XlibBackend backend(panel.winId());
+ if(!backend.ready()){std::fprintf(stderr,"agino-keyboard-embed: cannot open the X11 display or it has no XTEST extension\n");return 2;}
+ KeySender keys(backend);
+ const auto keyConnection=QObject::connect(&state,&KeyboardState::keyRequested,&app,[&keys](KeySpec k,bool release){keys.send(k,release);});
+ // The clock only serves the repeat of a held backspace: it runs while one is held.
+ QTimer clock;clock.setInterval(16);
+ QObject::connect(&clock,&QTimer::timeout,&state,&KeyboardState::tick);
+ QObject::connect(&state,&KeyboardState::clockNeededChanged,&clock,[&clock](bool needed){if(needed)clock.start();else clock.stop();});
  QObject::connect(&app,&QCoreApplication::aboutToQuit,&state,&KeyboardState::cancelAll);
- // The panel has a Hide key; here it would leave a window that rejects all input (no way to show it again).
+ // The panel never closes: if it is dismissed anyway it shows itself again (a hidden panel rejects all input).
  QObject::connect(&state,&KeyboardState::visibleChanged,&state,[&state](bool visible){if(!visible)QTimer::singleShot(0,&state,[&state]{state.manualShow();});});
 
  state.manualShow();
@@ -140,5 +133,9 @@ int main(int argc,char **argv){
  // The end of the standard input (the session program closed the process) ends the program.
  QSocketNotifier input(STDIN_FILENO,QSocketNotifier::Read);
  QObject::connect(&input,&QSocketNotifier::activated,&app,[&app]{char buffer[64];if(read(STDIN_FILENO,buffer,sizeof(buffer))<=0)app.quit();});
- return app.exec();
+ const int result=app.exec();
+ // The sender goes first when the variables are destroyed: nothing may reach it after this.
+ QObject::disconnect(keyConnection);
+ keys.releaseAll();
+ return result;
 }

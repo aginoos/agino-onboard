@@ -17,7 +17,7 @@
 #include <X11/Xutil.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/XTest.h>
-DesktopAdapter::DesktopAdapter(QObject *p):QObject(p){
+DesktopAdapter::DesktopAdapter(QObject *p,bool trackInputSource):QObject(p){
  wayland_=QGuiApplication::platformName().startsWith("wayland");
  auto bus=QDBusConnection::sessionBus();
  bus.connect("org.deepin.dde.SessionManager1","/org/deepin/dde/SessionManager1","org.deepin.dde.SessionManager1","LockedChanged",this,SLOT(sessionLock(bool,QDBusMessage)));
@@ -39,8 +39,9 @@ DesktopAdapter::DesktopAdapter(QObject *p):QObject(p){
  if(wayland_){detectWayland();return;}
  auto d=XOpenDisplay(nullptr);display_=d;if(!d)return;
  caps_.layer=caps_.text=true;int event,error,major=2,minor=2;
- if(XQueryExtension(d,"XInputExtension",&xiOpcode_,&event,&error)&&XIQueryVersion(d,&major,&minor)==Success){unsigned char mask[XIMaskLen(XI_LASTEVENT)]={};XISetMask(mask,XI_RawTouchBegin);XISetMask(mask,XI_RawKeyPress);XISetMask(mask,XI_RawButtonPress);XIEventMask events{XIAllMasterDevices,sizeof(mask),mask};XISelectEvents(d,DefaultRootWindow(d),&events,1);caps_.source=true;}
- notifier_=new QSocketNotifier(ConnectionNumber(d),QSocketNotifier::Read,this);connect(notifier_,&QSocketNotifier::activated,this,[this]{readXEvents();});XFlush(d);
+ if(XQueryExtension(d,"XInputExtension",&xiOpcode_,&event,&error)&&XIQueryVersion(d,&major,&minor)==Success){if(trackInputSource){unsigned char mask[XIMaskLen(XI_LASTEVENT)]={};XISetMask(mask,XI_RawTouchBegin);XISetMask(mask,XI_RawKeyPress);XISetMask(mask,XI_RawButtonPress);XIEventMask events{XIAllMasterDevices,sizeof(mask),mask};XISelectEvents(d,DefaultRootWindow(d),&events,1);}caps_.source=true;}
+ if(trackInputSource){notifier_=new QSocketNotifier(ConnectionNumber(d),QSocketNotifier::Read,this);connect(notifier_,&QSocketNotifier::activated,this,[this]{readXEvents();});}
+ XFlush(d);
 }
 DesktopAdapter::~DesktopAdapter(){detach();delete notifier_;if(display_)XCloseDisplay(static_cast<Display*>(display_));}
 void DesktopAdapter::detectWayland(){
@@ -60,7 +61,7 @@ void DesktopAdapter::detectWayland(){
 bool DesktopAdapter::attach(QWindow *w){
  if(!w)return false;
  detach();
- window_=w;requestedSize_={};requestedOutput_=nullptr;window_->installEventFilter(this);window_->setFlags(Qt::Tool|Qt::FramelessWindowHint|Qt::WindowStaysOnTopHint|Qt::WindowDoesNotAcceptFocus);
+ strutCleared_=false;window_=w;requestedSize_={};requestedOutput_=nullptr;window_->installEventFilter(this);window_->setFlags(Qt::Tool|Qt::FramelessWindowHint|Qt::WindowStaysOnTopHint|Qt::WindowDoesNotAcceptFocus);
  if(wayland_){if(!caps_.waylandReady())return false;w->setProperty(KeyboardWayland::ExclusiveZone,0);}
  else{if(!display_)return false;auto d=static_cast<Display*>(display_);auto type=XInternAtom(d,"_NET_WM_WINDOW_TYPE_DOCK",False);XChangeProperty(d,w->winId(),XInternAtom(d,"_NET_WM_WINDOW_TYPE",False),XA_ATOM,32,PropModeReplace,reinterpret_cast<unsigned char*>(&type),1);XWMHints hints{};hints.flags=InputHint;hints.input=False;XSetWMHints(d,w->winId(),&hints);}
  setOutput(w->screen());auto resized=[this]{if(wayland_&&floating_&&negotiatedSize_.isValid()&&window_->size()!=negotiatedSize_)return;updateGeometry();};connect(w,&QWindow::heightChanged,this,resized);connect(w,&QWindow::widthChanged,this,resized);return true;
@@ -125,13 +126,15 @@ void DesktopAdapter::moveBy(double dx,double dy){
  if(!floating_)position_=wayland_?QPoint((g.width()-window_->width())/2,g.height()-window_->height()):window_->position()-g.topLeft();
  floating_=true;position_+=QPointF(qBound(-double(g.width()),dx,double(g.width())),qBound(-double(g.height()),dy,double(g.height())));updateGeometry();
 }
-void DesktopAdapter::strut(bool visible){if(!display_||!window_)return;auto d=static_cast<Display*>(display_);unsigned long values[12]={};Window ignored;int x=0,y=0;XTranslateCoordinates(d,window_->winId(),DefaultRootWindow(d),0,0,&x,&y,&ignored);XWindowAttributes a{};XGetWindowAttributes(d,window_->winId(),&a);
+void DesktopAdapter::strut(bool visible){if(!display_||!window_)return;
+ // A floating panel reserves no space: once cleared, moving it needs no round trip to the X server.
+ if(!visible&&strutCleared_)return;strutCleared_=!visible;
+auto d=static_cast<Display*>(display_);unsigned long values[12]={};Window ignored;int x=0,y=0;XTranslateCoordinates(d,window_->winId(),DefaultRootWindow(d),0,0,&x,&y,&ignored);XWindowAttributes a{};XGetWindowAttributes(d,window_->winId(),&a);
  if(visible&&y+a.height>=DisplayHeight(d,DefaultScreen(d))){values[3]=DisplayHeight(d,DefaultScreen(d))-y;values[10]=qMax(0,x);values[11]=qMax(0,x+a.width-1);}XChangeProperty(d,window_->winId(),XInternAtom(d,"_NET_WM_STRUT_PARTIAL",False),XA_CARDINAL,32,PropModeReplace,reinterpret_cast<unsigned char*>(values),12);XChangeProperty(d,window_->winId(),XInternAtom(d,"_NET_WM_STRUT",False),XA_CARDINAL,32,PropModeReplace,reinterpret_cast<unsigned char*>(values),4);XFlush(d);
 }
 void DesktopAdapter::setPanelVisible(bool v){if(!window_)return;if(v){updateGeometry();if(wayland_)window_->setProperty(KeyboardWayland::ExclusiveZone,floating_?-1:window_->height());window_->show();if(!wayland_)strut(!floating_);}else{if(wayland_&&caps_.layer)window_->setProperty(KeyboardWayland::ExclusiveZone,0);else strut(false);window_->hide();}}
 QString DesktopAdapter::status()const{if(wayland_)return !caps_.waylandReady()?tr("The Wayland docking plugin or the layer-shell / text-input protocol is unavailable"):caps_.source?tr("Wayland: touch detection and manual activation are supported"):tr("Wayland: the input device cannot be identified, manual activation only");return caps_.source?tr("X11: touch detection and manual activation are supported"):tr("X11: the input device cannot be identified, manual activation only");}
 void DesktopAdapter::readXEvents(){auto d=static_cast<Display*>(display_);while(XPending(d)){XEvent event;XNextEvent(d,&event);if(event.type!=GenericEvent||event.xcookie.extension!=xiOpcode_||!XGetEventData(d,&event.xcookie))continue;auto raw=static_cast<XIRawEvent*>(event.xcookie.data);int count;auto info=XIQueryDevice(d,raw->sourceid,&count);bool synthetic=info&&count&&QByteArray(info[0].name).contains("XTEST");if(info)XIFreeDeviceInfo(info);if(!synthetic){if(event.xcookie.evtype==XI_RawTouchBegin)emit inputSourceChanged(KeyboardState::Touch);else if(event.xcookie.evtype==XI_RawKeyPress)emit inputSourceChanged(KeyboardState::PhysicalKeyboard);else if(event.xcookie.evtype==XI_RawButtonPress&&!(raw->flags&XIPointerEmulated))emit inputSourceChanged(KeyboardState::Mouse);}XFreeEventData(d,&event.xcookie);}}
-bool DesktopAdapter::sendCompatibilityKey(KeySpec k,bool release){if(wayland_||!display_||!window_)return false;auto d=static_cast<Display*>(display_);Window focus;int revert;XGetInputFocus(d,&focus,&revert);if(focus==None||focus==PointerRoot||focus==window_->winId())return false;auto code=k.code?k.code:XKeysymToKeycode(d,k.sym);if(!code)return false;XTestFakeKeyEvent(d,code,!release,CurrentTime);XFlush(d);return true;}
 void DesktopAdapter::sessionLock(bool value,const QDBusMessage &message){
  const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner("org.deepin.dde.SessionManager1");
  if(owner.isValid()&&owner.value()==message.service())lock(value);

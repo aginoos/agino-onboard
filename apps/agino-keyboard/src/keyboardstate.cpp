@@ -12,25 +12,27 @@ KeySpec KeyboardState::resolved(KeySpec k)const{
  else if(k.modifiers&3){const QByteArray plain="`1234567890-=[]\\;',./",shift="~!@#$%^&*()_+{}|:\"<>?";int n=plain.indexOf(char(k.sym));if(k.sym<128&&n>=0)k.sym=quint8(shift[n]);}
  return k;
 }
+void KeyboardState::updateClockNeeded(){bool needed=false;for(const auto &t:touches_)needed|=t.key.sym==0xff08;if(needed!=clockNeeded_){clockNeeded_=needed;emit clockNeededChanged(needed);}}
 void KeyboardState::beginTouch(int id,KeySpec k){
  if(!layoutFits_||!editable_||mode_==Off||settingsOpen_||touches_.contains(id))return;
+ syncClock();
  const bool shift=shiftKey(k.sym);
  if(!shift||!touches_.isEmpty()){lastShiftTap_=-1;for(auto &held:touches_)held.shiftTap=false;}
  TouchKey t{resolved(k),bool(mask(k.sym)),clock_+450,clock_,shift&&touches_.isEmpty()};
  bool duplicate=false;for(const auto &held:touches_)if(held.sent&&held.key.sym==t.key.sym)duplicate=true;
- touches_.insert(id,t); updateModifiers();
+ touches_.insert(id,t); updateModifiers();updateClockNeeded();
  if(t.sent&&!duplicate)emit keyRequested(t.key,false);
 }
 void KeyboardState::endTouch(int id,bool inside){
- auto it=touches_.find(id);if(it==touches_.end())return;auto t=it.value();touches_.erase(it);
+ auto it=touches_.find(id);if(it==touches_.end())return;syncClock();auto t=it.value();touches_.erase(it);
  if(t.sent){bool duplicate=false;for(const auto &held:touches_)if(held.sent&&held.key.sym==t.key.sym)duplicate=true;if(!duplicate)emit keyRequested(t.key,true);}else if(inside&&editable_&&!t.repeated){shiftLatched_=false;emit keyRequested(t.key,false);emit keyRequested(t.key,true);}
  if(shiftKey(t.key.sym)){
   if(inside&&t.shiftTap&&clock_-t.started<=350){if(lastShiftTap_>=0&&clock_-lastShiftTap_<=400){caps_=!caps_;shiftLatched_=false;lastShiftTap_=-1;}else{shiftLatched_=!shiftLatched_;lastShiftTap_=clock_;}}
   else lastShiftTap_=-1;
  }
- if(inside&&t.key.sym==0xffe5)caps_=!caps_;updateModifiers();
+ if(inside&&t.key.sym==0xffe5)caps_=!caps_;updateModifiers();updateClockNeeded();
 }
-void KeyboardState::cancelAll(){lastShiftTap_=-1;shiftLatched_=false;const auto copy=touches_;touches_.clear();QSet<quint32> released;for(const auto &t:copy)if(t.sent&&!released.contains(t.key.sym)){released.insert(t.key.sym);emit keyRequested(t.key,true);}updateModifiers();}
+void KeyboardState::cancelAll(){lastShiftTap_=-1;shiftLatched_=false;const auto copy=touches_;touches_.clear();QSet<quint32> released;for(const auto &t:copy)if(t.sent&&!released.contains(t.key.sym)){released.insert(t.key.sym);emit keyRequested(t.key,true);}updateModifiers();updateClockNeeded();}
 void KeyboardState::setContext(quint64 e,bool editable,bool sensitive){
  if(e!=epoch_||!editable||sensitive!=sensitive_)cancelAll();
  if(e!=epoch_)suppressed_=false;
@@ -41,7 +43,7 @@ void KeyboardState::setContext(quint64 e,bool editable,bool sensitive){
 }
 void KeyboardState::setMode(Mode m){if(mode_==m)return;cancelAll();manualVisible_=false;mode_=m;emit inputAllowedChanged();if(!settingsOpen_)show(false);}
 void KeyboardState::setSource(InputSource s){source_=s;if(!layoutFits_||settingsOpen_)return;if(s==VirtualKeyboard)return;if(mode_!=Automatic)return;if(s==Touch||s==Pen){suppressed_=false;show(editable_);}}
-void KeyboardState::advanceClock(qint64 now){clock_=now;for(auto &t:touches_)if(t.key.sym==0xff08){while(t.nextRepeat<=now){emit keyRequested(t.key,false);emit keyRequested(t.key,true);t.repeated=true;t.nextRepeat+=60;}}}
+void KeyboardState::advanceClock(qint64 now){clock_=now;for(auto &t:touches_)if(t.key.sym==0xff08){int repeats=0;while(t.nextRepeat<=now&&repeats<2){emit keyRequested(t.key,false);emit keyRequested(t.key,true);t.repeated=true;t.nextRepeat+=60;++repeats;}if(t.nextRepeat<=now)t.nextRepeat=now+60;}}
 void KeyboardState::manualShow(){if(layoutFits_&&mode_!=Off){suppressed_=false;manualVisible_=true;show(true);}}
 void KeyboardState::setSettingsOpen(bool value){
  if(settingsOpen_==value||(!layoutFits_&&value))return;

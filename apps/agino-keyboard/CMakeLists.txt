@@ -218,7 +218,10 @@ add_executable(agino-keyboard-embed src/embed-main.cpp src/preferences.h native.
  src/native/nativepanel.cpp src/native/nativepanel.h src/native/nativeoutput.cpp src/native/nativecandidaterows.cpp src/native/nativecandidaterows.h src/native/nativepainting.cpp
  src/native/nativesettings.cpp src/native/nativesettings.h src/native/nativeaccessible.cpp)
 target_include_directories(agino-keyboard-embed PRIVATE src src/native)
-target_link_libraries(agino-keyboard-embed PRIVATE fcitx-client candidate-rows desktop-adapter key-sound panel-platform Qt6::Gui Dtk6::Gui X11::X11 X11::Xtst)
+target_link_libraries(agino-keyboard-embed PRIVATE fcitx-client panel-platform Qt6::Gui Dtk6::Gui X11::X11 X11::Xtst)
+add_executable(test-keysender tests/test_keysender.cpp)
+target_link_libraries(test-keysender PRIVATE keyboard-state Qt6::Test)
+add_test(NAME keyboard-keysender COMMAND test-keysender)
 install(TARGETS agino-keyboard-embed RUNTIME DESTINATION bin)
 add_executable(test-native-accessible src/native/nativeaccessible.cpp src/native/nativeaccessible_test.cpp)
 target_link_libraries(test-native-accessible PRIVATE Qt6::Gui)

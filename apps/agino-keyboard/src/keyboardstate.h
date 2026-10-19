@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QHash>
+#include <QElapsedTimer>
 struct KeySpec { quint32 sym=0, code=0, modifiers=0; bool operator==(const KeySpec &k)const{return sym==k.sym&&code==k.code&&modifiers==k.modifiers;} };
 Q_DECLARE_METATYPE(KeySpec)
 class KeyboardState:public QObject {
@@ -21,6 +22,10 @@ public:
  void beginTouch(int,KeySpec); void endTouch(int,bool); void cancelAll();
  Q_INVOKABLE void setContext(quint64,bool,bool); void setMode(Mode); void setSource(InputSource);
  void advanceClock(qint64); void manualShow(); void dismiss();
+ // With the wall clock the key times come from a monotonic timer, so the owner may stop its tick timer while
+ // clockNeeded() is false (only a held backspace repeats); without it (tests) advanceClock() sets the time.
+ void useWallClock(){wall_.start();wallClock_=true;} void tick(){if(wallClock_)advanceClock(wall_.elapsed());}
+ bool clockNeeded()const{return clockNeeded_;}
  void setLayoutFits(bool fits){if(layoutFits_==fits)return;layoutFits_=fits;emit inputAllowedChanged();if(!fits)dismiss();}
  bool layoutFits()const{return layoutFits_;}
  Q_INVOKABLE void press(int id,quint32 sym){beginTouch(id,KeySpec{sym});}
@@ -28,12 +33,12 @@ public:
  Q_INVOKABLE void cancel(){cancelAll();}
  Q_INVOKABLE void closePanel(){dismiss();}
 signals:
- void keyRequested(KeySpec,bool); void visibleChanged(bool); void inputAllowedChanged(); void modifiersChanged(); void settingsOpenChanged();
+ void keyRequested(KeySpec,bool); void visibleChanged(bool); void clockNeededChanged(bool); void inputAllowedChanged(); void modifiersChanged(); void settingsOpenChanged();
 private:
  struct TouchKey {KeySpec key; bool sent=false; qint64 nextRepeat=0; qint64 started=0; bool shiftTap=false; bool repeated=false;};
- void show(bool); void updateModifiers(); KeySpec resolved(KeySpec)const;
+ void show(bool); void updateModifiers(); void updateClockNeeded(); void syncClock(){if(wallClock_)clock_=wall_.elapsed();} KeySpec resolved(KeySpec)const;
  QHash<int,TouchKey> touches_;
  Mode mode_=Automatic; InputSource source_=Unknown; quint64 epoch_=0;
  bool editable_=false,sensitive_=false,suppressed_=false,manualVisible_=false,caps_=false,shiftLatched_=false; qint64 clock_=0,lastShiftTap_=-1;
- bool visible_=false,layoutFits_=true,settingsOpen_=false; quint32 modifiers_=0;
+ bool visible_=false,layoutFits_=true,settingsOpen_=false,clockNeeded_=false,wallClock_=false; quint32 modifiers_=0; QElapsedTimer wall_;
 };

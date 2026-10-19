@@ -9,22 +9,23 @@
 #include <memory>
 static constexpr auto service="org.agino.Keyboard1";
 static constexpr auto path="/org/agino/Keyboard1";
-FcitxClient::FcitxClient(QObject *p):QObject(p){
+FcitxClient::FcitxClient(QObject *p,bool standalone):QObject(p),standalone_(standalone){
+ if(standalone_)return;
  namesRetryTimer_.setSingleShot(true);
  connect(&namesRetryTimer_,&QTimer::timeout,this,&FcitxClient::requestInputMethodNames);
- reconnectTimer_.setInterval(2000);connect(&reconnectTimer_,&QTimer::timeout,this,[this]{if(!connected_)refresh();});reconnectTimer_.start();
+ reconnectTimer_.setInterval(2000);connect(&reconnectTimer_,&QTimer::timeout,this,[this]{if(!connected_){refresh();reconnectTimer_.setInterval(qMin(reconnectTimer_.interval()*2,60000));}});reconnectTimer_.start();
  auto bus=QDBusConnection::sessionBus();
- controllerOwner_=bus.interface()->serviceOwner("org.fcitx.Fcitx5").value();
+ if(bus.interface())controllerOwner_=bus.interface()->serviceOwner("org.fcitx.Fcitx5").value();
  auto controllerWatcher=new QDBusServiceWatcher("org.fcitx.Fcitx5",bus,QDBusServiceWatcher::WatchForOwnerChange,this);
  connect(controllerWatcher,&QDBusServiceWatcher::serviceOwnerChanged,this,&FcitxClient::controllerOwnerChanged);
  auto watcher=new QDBusServiceWatcher(service,bus,QDBusServiceWatcher::WatchForOwnerChange,this);
  connect(watcher,&QDBusServiceWatcher::serviceOwnerChanged,this,&FcitxClient::ownerChanged);
  bus.connect(service,path,service,"SnapshotChanged",this,SLOT(snapshot(QDBusMessage)));
- bus.connect(service,path,service,"PhysicalKey",this,SIGNAL(physicalKey()));
  QTimer::singleShot(0,this,&FcitxClient::refresh);
 }
-void FcitxClient::clear(){++pageRevision_;++generation_;++namesRevision_;reconnectTimer_.start();appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("Waiting for the Fcitx5 screen keyboard plugin");emit changed();}
-void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){++generation_;clear();if(!owner.isEmpty())refresh();}
+void FcitxClient::subscribePhysicalKey(){if(!standalone_)QDBusConnection::sessionBus().connect(service,path,service,"PhysicalKey",this,SIGNAL(physicalKey()));}
+void FcitxClient::clear(){const bool wasCleared=cleared_;cleared_=true;reconnectTimer_.start();++pageRevision_;++generation_;++namesRevision_;appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("Waiting for the Fcitx5 screen keyboard plugin");if(!wasCleared)emit changed();}
+void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){++generation_;reconnectTimer_.setInterval(2000);clear();if(!owner.isEmpty())refresh();}
 void FcitxClient::refresh(){
  if(standalone_)return;
  const auto gen=generation_,policy=appliedPolicyRevision_;auto bus=QDBusConnection::sessionBus();
@@ -72,7 +73,7 @@ void FcitxClient::snapshot(const QDBusMessage &m){
  auto context=a[0].toULongLong(),candidate=a[1].toULongLong();
  if(context<context_||(context==context_&&candidate<candidate_))return;
  if(context!=context_){++pageRevision_;paging_=false;}
- context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;reconnectTimer_.stop();
+ context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;cleared_=false;reconnectTimer_.stop();reconnectTimer_.setInterval(2000);
  synchronizePolicy();
  if(!editable()||sensitive()){preedit_.clear();candidates_.clear();next_=prev_=false;}
  status_=editable()?(sensitive()?tr("Secure input"):QString()):tr("Select a text field first");emit changed();emit targetRect(a[10].toInt(),a[11].toInt());

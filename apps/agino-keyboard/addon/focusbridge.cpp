@@ -91,11 +91,14 @@ public:
  void notify(){const auto s=getSnapshot();lastEditable_=std::get<2>(s);lastSensitive_=std::get<3>(s);changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));}
  bool sendKey(uint32_t sym,uint32_t code,uint32_t mods,bool release,uint64_t epoch){
   if(epoch!=epoch_||!editable())return false;
+  // A key of the keyboard: a symbol (X11 or Unicode up to U+10FFFF without the surrogates), a keycode of the X11 range, the modifier bits of X11.
+  if(sym==0||sym>0x0110ffff||(sym>=0x0100d800&&sym<=0x0100dfff)||code>255)return false;
+  mods&=0x1fff;
   const auto sender=currentMessage()?currentMessage()->sender():std::string();
   if(sender.empty())return false;
   Key key(static_cast<KeySym>(sym),KeyStates(mods)|KeyState::Virtual,code);
   if(release){auto it=held_.find(sym);if(it==held_.end()||it->second.sender!=sender)return false;auto held=it->second;auto context=focus()->watch();held_.erase(it);if(held.engine&&context.get()){KeyEvent event(context.get(),held.key,true);context.get()->keyEvent(event);}if(held.forwarded&&context.get())context.get()->forwardKey(held.key,true);return true;}
-  if(held_.count(sym))return false;
+  if(held_.count(sym)||held_.size()>=16)return false;
   held_.emplace(sym,HeldKey{key,false,!sensitive(),sender});
   // Feed the engine first. An unconsumed printable character is text, while
   // shortcuts/control keys retain their forwarded press/release pair.
@@ -114,7 +117,7 @@ public:
   if(epoch!=epoch_||candidate!=candidate_||!editable()||sensitive())return false;
   if(sogou_->ready()){if(!sogou_->selectable())return false;if(next?!sogou_->data().next:!sogou_->data().prev)return false;Key key(next?FcitxKey_Next:FcitxKey_Prior,KeyState::Virtual);auto context=focus()->watch();KeyEvent press(focus(),key,false);focus()->keyEvent(press);if(context.get()){KeyEvent release(context.get(),key,true);context.get()->keyEvent(release);}return true;}
   auto list=focus()->inputPanel().candidateList();if(!list)return false;
-  if(list->toBulk()){if(!next||limit_>INT32_MAX-128)return false;limit_+=128;notify();return true;}
+  if(list->toBulk()){if(!next||limit_>=1024)return false;limit_+=128;notify();return true;}
   auto pages=list->toPageable();if(!pages||(next?!pages->hasNext():!pages->hasPrev()))return false;
   next?pages->next():pages->prev();focus()->updateUserInterface(UserInterfaceComponent::InputPanel);return true;
  }

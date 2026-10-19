@@ -30,7 +30,7 @@ private:
 };
 KeySound::~KeySound(){
  // Joining is reserved for process shutdown. Setting changes never join.
- for(auto *thread:threads_){disconnect(thread,nullptr,this,nullptr);thread->quit();thread->wait();delete thread;}
+ for(auto *thread:threads_){disconnect(thread,nullptr,this,nullptr);thread->quit();if(!thread->wait(1000)){thread->terminate();thread->wait(500);}delete thread;}
 }
 void KeySound::setEnabled(bool enabled){
  if(enabled==active())return;

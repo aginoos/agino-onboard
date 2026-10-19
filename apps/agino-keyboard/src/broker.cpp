@@ -41,7 +41,7 @@ public:
   connect(&worker,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus kind){
    const bool restart=retiring&&code==0&&kind==QProcess::NormalExit&&!pending.isEmpty();
    if(!restart)pending.clear();
-   ready=false;retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
+   retireTimer.stop();unanswered=0;ready=false;retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
    state.dismiss();if(code||kind==QProcess::CrashExit)cached["workerError"]=tr("The keyboard window has exited; show it again to restart it");
    if(restart)QTimer::singleShot(0,this,[this]{startWorker();});
    if(!capture.isEmpty())QCoreApplication::exit(code==0&&QFileInfo::exists(capture)?0:2);
@@ -67,6 +67,8 @@ public:
   connect(&platform,&IdlePlatform::settingsRequested,this,&Broker::Settings);
   connect(&platform,&IdlePlatform::quitRequested,qApp,&QCoreApplication::quit);
   connect(&reload,&QTimer::timeout,&prefs,&Preferences::reload);reload.setSingleShot(true);reload.setInterval(50);
+  // A keyboard window that agreed to end but does not must not leave the controller waiting for ever.
+  retireTimer.setSingleShot(true);retireTimer.setInterval(3000);connect(&retireTimer,&QTimer::timeout,this,[this]{if(retiring&&worker.state()!=QProcess::NotRunning){qWarning("The keyboard window does not end, ending it");worker.kill();}});
   const QString folder=QFileInfo(QSettings().fileName()).absolutePath();QDir().mkpath(folder);files.addPath(folder);
   connect(&files,&QFileSystemWatcher::directoryChanged,this,[this]{reload.start();});
   apply();
@@ -103,7 +105,7 @@ public slots:
   auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);
   if(!calledFromDBus()||!owner.isValid()||message().service()!=owner.value()||activeRequests)return false;
   updateCache(value);if(cached.value("visible").toBool())return false;
-  resume=value;resume["resuming"]=true;retiring=true;return true;
+  resume=value;resume["resuming"]=true;retiring=true;retireTimer.start();return true;
  }
  void workerState(const QVariantMap &value,const QDBusMessage &signal){const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);if(owner.isValid()&&signal.service()==owner.value())updateCache(value);}
 private:
@@ -148,24 +150,31 @@ private:
  void relay(const QString &method,const QVariantList &arguments={}){
   auto m=QDBusMessage::createMethodCall(workerService,uiPath,uiInterface,method);m.setArguments(arguments);++activeRequests;
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,10000),this);
-  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher]{watcher->deleteLater();--activeRequests;});
+  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher]{
+   QDBusPendingReply<> reply=*watcher;watcher->deleteLater();--activeRequests;
+   // A worker that does not answer twice in a row hangs: end it, the next request starts a new one.
+   const auto type=reply.isError()?reply.error().type():QDBusError::NoError;
+   if(type==QDBusError::NoReply||type==QDBusError::Timeout||type==QDBusError::TimedOut){if(++unanswered>=2&&worker.state()!=QProcess::NotRunning){unanswered=0;qWarning("The keyboard window does not answer, ending it");worker.kill();}}
+   else unanswered=0;
+  });
  }
- Preferences &prefs;FcitxClient &client;IdlePlatform &platform;KeyboardState state;QProcess worker;QFileSystemWatcher files;QTimer reload;
- QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,sourceKind=0;double sourceX=0,sourceY=0;
+ Preferences &prefs;FcitxClient &client;IdlePlatform &platform;KeyboardState state;QProcess worker;QFileSystemWatcher files;QTimer reload,retireTimer;
+ QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,unanswered=0,sourceKind=0;double sourceX=0,sourceY=0;
 };
 static void errorDialog(const QString &message){
  QString path=QCoreApplication::applicationDirPath()+"/agino-keyboard-ui";if(!QFileInfo::exists(path))path=QCoreApplication::applicationDirPath()+"/../libexec/agino-keyboard-ui";
- QProcess dialog;const pid_t parent=getpid();dialog.setChildProcessModifier([parent]{if(prctl(PR_SET_PDEATHSIG,SIGTERM)<0||getppid()!=parent)_exit(2);});dialog.start(path,{"--error-message",message});if(dialog.waitForStarted())dialog.waitForFinished(-1);
+ QProcess dialog;const pid_t parent=getpid();dialog.setChildProcessModifier([parent]{if(prctl(PR_SET_PDEATHSIG,SIGTERM)<0||getppid()!=parent)_exit(2);});dialog.start(path,{"--error-message",message});if(dialog.waitForStarted()&&!dialog.waitForFinished(60000))dialog.kill();
 }
 int main(int argc,char **argv){
  QCoreApplication app(argc,argv);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");AginoI18n::install(app);
- bool hidden=false,settings=false;QString capture;for(int i=1;i<argc;++i){QByteArray a(argv[i]);hidden|=a=="--hidden";settings|=a=="--settings";if(a=="--screenshot"&&i+1<argc)capture=QString::fromLocal8Bit(argv[++i]);}
+ bool hidden=false,settings=false;QString capture;for(int i=1;i<argc;++i){QByteArray a(argv[i]);hidden|=a=="--hidden";settings|=a=="--settings";if(a=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))capture=QString::fromLocal8Bit(argv[++i]);}
  auto bus=QDBusConnection::sessionBus();if(!bus.registerService(publicService)){auto m=QDBusMessage::createMethodCall(publicService,uiPath,uiInterface,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
  VirtualKeyboardUi ui;if(!ui.start()){errorDialog(QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}
  if(ui.ownsInterface()){
   const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");
-  if(!enableVirtualKeyboardConfig(path)){errorDialog(QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
-  auto m=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");m.setAutoStartService(false);bus.asyncCall(m,1000);
+  bool configChanged=false;
+  if(!enableVirtualKeyboardConfig(path,&configChanged)){errorDialog(QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
+  if(configChanged){auto m=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");m.setAutoStartService(false);bus.asyncCall(m,1000);}
  }
  Preferences prefs;FcitxClient client;IdlePlatform platform;Broker broker(prefs,client,platform);broker.setCapture(capture);
  bus.registerObject(uiPath,&broker,QDBusConnection::ExportAllSlots);

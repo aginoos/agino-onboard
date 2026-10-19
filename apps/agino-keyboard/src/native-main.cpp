@@ -36,9 +36,11 @@ using Dtk::Gui::DGuiApplicationHelper;
 static bool enableVirtualKeyboard(){
  // Only opt in to the user's virtual-keyboard addon; never replace their profile.
  const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");
- if(!enableVirtualKeyboardConfig(path))return false;
- auto msg=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");
- msg.setAutoStartService(false);QDBusConnection::sessionBus().asyncCall(msg,1000);return true;
+ bool changed=false;
+ if(!enableVirtualKeyboardConfig(path,&changed))return false;
+ if(changed){auto msg=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");
+ msg.setAutoStartService(false);QDBusConnection::sessionBus().asyncCall(msg,1000);}
+ return true;
 }
 static void panelMessage(bool information,const QString &message){
  QProcess dialog;QEventLoop loop;
@@ -66,7 +68,7 @@ public:
   if(managed_)connect(&prefs,&Preferences::changed,this,[this]{synchronizeBrokerPolicy(++policySerial_);});
   connect(&state,&KeyboardState::settingsOpenChanged,this,&WindowManager::syncContext);
 
-  elapsed.start();timer.setInterval(16);connect(&timer,&QTimer::timeout,this,[this]{state.advanceClock(elapsed.elapsed());});
+  state.useWallClock();timer.setInterval(16);connect(&timer,&QTimer::timeout,this,[this]{state.tick();});
   idleTimer.setSingleShot(true);idleTimer.setInterval(3000);
   connect(&idleTimer,&QTimer::timeout,this,[this]{unloadPanel();retire();});
   const auto saved=QJsonDocument::fromJson(qgetenv("AGINO_UI_RESUME")).object().toVariantMap();
@@ -74,15 +76,17 @@ public:
   state.setCapsLock(saved.value("capsLock").toBool());desktop.restorePlacement(saved);
   showSerial_=saved.value("showSerial").toULongLong();lastFrameSerial_=saved.value("firstFrameSerial").toULongLong();lastFrameMs_=saved.value("firstFrameMs",-1.).toDouble();
   auto publish=[this]{QTimer::singleShot(0,this,[this]{emit StateChanged(Status());});};
-  connect(&state,&KeyboardState::visibleChanged,this,publish);connect(&state,&KeyboardState::settingsOpenChanged,this,publish);connect(&state,&KeyboardState::modifiersChanged,this,publish);
-  connect(&state,&KeyboardState::visibleChanged,this,[this](bool v){if(v&&state.visible()){state.advanceClock(elapsed.elapsed());timer.start();}else timer.stop();});
+  connect(&state,&KeyboardState::visibleChanged,this,publish);connect(&state,&KeyboardState::settingsOpenChanged,this,publish);
+  connect(&state,&KeyboardState::clockNeededChanged,this,[this](bool needed){if(needed)timer.start();else timer.stop();});
  }
  void unloadPanel(){
    if(state.visible()||!view||view->isVisible())return;
    state.cancelAll();lastFrameMs_=view->firstFrameMilliseconds();lastFrameSerial_=view->firstFrameSerial();desktop.detach();view.reset();
+   // Only without the controller (started by hand): a worker of the controller ends right after this, which
+   // returns everything, so the font cache hook (an internal Qt hook, reassess it when upgrading Qt) is not used.
+   if(managed_)return;
    // Qt 6.8.0: reset this GUI thread's font cache after every panel/font user
    // is gone. Surviving fonts reload by cache id on reuse.
-   // cleanup() is an internal Qt hook; reassess it when upgrading Qt.
    QFont::cleanup();
 #if defined(Q_OS_LINUX) && defined(__GLIBC__)
    // Return free allocator pages after the native panel has been destroyed.
@@ -102,13 +106,13 @@ public:
   resizePanel();return true;
  }
  NativePanel *panel()const{return view.get();}
- void synchronizeBrokerPolicy(quint64 serial){
+ void synchronizeBrokerPolicy(quint64 serial,int attempt=0){
   state.cancelAll();client.setPolicyBlocked(true);
   auto m=QDBusMessage::createMethodCall("org.agino.KeyboardUi1","/Keyboard","org.agino.KeyboardUi1","PreferencesChanged");
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,2000),this);
-  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,serial]{
+  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,serial,attempt]{
    QDBusPendingReply<bool> reply=*watcher;watcher->deleteLater();if(serial!=policySerial_)return;
-   if(reply.isError()||!reply.value()){QTimer::singleShot(100,this,[this,serial]{if(serial==policySerial_)synchronizeBrokerPolicy(serial);});return;}
+   if(reply.isError()||!reply.value()){QTimer::singleShot(qMin(100<<qMin(attempt,5),2000),this,[this,serial,attempt]{if(serial==policySerial_)synchronizeBrokerPolicy(serial,attempt+1);});return;}
    client.refreshSnapshot();client.setPolicyBlocked(false);
   });
  }
@@ -118,7 +122,7 @@ public:
  QScreen *selectedScreen()const{auto screens=qGuiApp->screens();auto screen=prefs.screenIndex()>=0&&prefs.screenIndex()<screens.size()?screens[prefs.screenIndex()]:desktop.targetOutput();return screen?screen:qGuiApp->primaryScreen();}
  // Snapshot callbacks often leave geometry metadata unchanged. Avoid dirtying
  // QSettings and its directory watcher for every key/focus update.
- void resizePanel(){if(resizing_)return;QScopedValueRollback<bool> guard(resizing_,true);auto screens=qGuiApp->screens();auto screen=selectedScreen();if(!screen)return;QSettings metadata;if(metadata.value("desktopStatus").toString()!=desktop.status())metadata.setValue("desktopStatus",desktop.status());QStringList availableNames;for(auto item:screens)availableNames<<item->name();if(metadata.value("screenNames").toStringList()!=availableNames)metadata.setValue("screenNames",availableNames);if(!view||!view->rootObject())return;view->rootObject()->setProperty("screenNames",availableScreenNames());int minimum=view->rootObject()->property("minimumHeight").toInt();auto g=screen->geometry();const QSize requested(prefs.compact()?524:qMax(828,qMin(934,g.width()-24)),minimum);const bool wasVisible=state.visible();state.setLayoutFits(g.width()>=requested.width()&&g.height()>=requested.height());if(!state.layoutFits()){if(wasVisible)sizeWarning();return;}desktop.configurePanel(screen,requested);QSettings info;const QString effectiveSize=QString("%1 × %2 px").arg(view->width()).arg(view->height());if(info.value("lastEffectiveSize").toString()!=effectiveSize)info.setValue("lastEffectiveSize",effectiveSize);if(info.value("desktopStatus").toString()!=desktop.status())info.setValue("desktopStatus",desktop.status());QStringList names;for(auto s:screens)names<<s->name();if(info.value("screenNames").toStringList()!=names)info.setValue("screenNames",names);}
+ void resizePanel(){if(resizing_)return;QScopedValueRollback<bool> guard(resizing_,true);auto screens=qGuiApp->screens();auto screen=selectedScreen();if(!screen)return;if(!view||!view->rootObject())return;view->rootObject()->setProperty("screenNames",availableScreenNames());int minimum=view->rootObject()->property("minimumHeight").toInt();auto g=screen->geometry();const QSize requested(prefs.compact()?524:qMax(828,qMin(934,g.width()-24)),minimum);const bool wasVisible=state.visible();state.setLayoutFits(g.width()>=requested.width()&&g.height()>=requested.height());if(!state.layoutFits()){if(wasVisible)sizeWarning();return;}desktop.configurePanel(screen,requested);}
  void syncContext(){state.setContext(client.contextEpoch(),client.editable()&&!state.settingsOpen()&&!locked_,client.sensitive());if(!client.connected()){state.cancelAll();if(wasConnected_)state.dismiss();}wasConnected_=client.connected();if(!managed_&&preferredPending_&&!state.settingsOpen()&&!locked_&&client.editable()&&!client.sensitive()&&client.inputMethods().contains(preferredIm_)){preferredPending_=false;if(client.inputMethod()!=preferredIm_)client.setInputMethod(preferredIm_);}QTimer::singleShot(0,this,&WindowManager::resizePanel);}
  void apply(){sound.setEnabled(prefs.keySound());if(!preferredInitialized_||preferredIm_!=prefs.preferredIm()){preferredInitialized_=true;preferredIm_=prefs.preferredIm();preferredPending_=!preferredIm_.isEmpty();}state.cancelAll();auto mode=KeyboardState::Mode(prefs.mode());if(mode==KeyboardState::Automatic&&!desktop.capabilities().automaticReady())mode=KeyboardState::Manual;state.setMode(mode);DGuiApplicationHelper::instance()->setPaletteType(DGuiApplicationHelper::ColorType(prefs.theme()));if(view&&view->rootObject())view->rootObject()->setProperty("functionRow",prefs.functionRow());if(!managed_)client.setSafeInput(prefs.safeInput());resizePanel();syncContext();}
  void compositorShow(){syncContext();}
@@ -150,7 +154,7 @@ private:
 int main(int argc,char **argv){
  // The native QtGui raster frontend has no Qt Quick/scenegraph backend.
  bool settings=false,hidden=false;QString screenshot,errorMessage;bool information=false;
- for(int i=1;i<argc;++i){if((QByteArray(argv[i])=="--error-message"||QByteArray(argv[i])=="--information-message")&&i+1<argc){information=QByteArray(argv[i])=="--information-message";errorMessage=QString::fromLocal8Bit(argv[++i]);}else if(QByteArray(argv[i])=="--settings")settings=true;if(QByteArray(argv[i])=="--hidden")hidden=true;if(QByteArray(argv[i])=="--screenshot"&&i+1<argc)screenshot=QString::fromLocal8Bit(argv[++i]);}
+ for(int i=1;i<argc;++i){if((QByteArray(argv[i])=="--error-message"||QByteArray(argv[i])=="--information-message")&&i+1<argc){information=QByteArray(argv[i])=="--information-message";errorMessage=QString::fromLocal8Bit(argv[++i]);}else if(QByteArray(argv[i])=="--settings")settings=true;if(QByteArray(argv[i])=="--hidden")hidden=true;if(QByteArray(argv[i])=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))screenshot=QString::fromLocal8Bit(argv[++i]);}
  if(qEnvironmentVariable("XDG_SESSION_TYPE")=="wayland"||!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))qputenv("QT_WAYLAND_SHELL_INTEGRATION","agino-keyboard");
  // The GUI connects normally; only compositor-launched Fcitx receives WAYLAND_SOCKET.
  qunsetenv("WAYLAND_SOCKET");
@@ -164,7 +168,7 @@ int main(int argc,char **argv){
  if(!bus.registerService(service)){auto m=QDBusMessage::createMethodCall(service,"/Keyboard",service,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
  Preferences prefs;FcitxClient client;
  VirtualKeyboardUi ui;if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")&&!ui.start()){panelMessage(false,QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}if(ui.ownsInterface()&&!enableVirtualKeyboard()){panelMessage(false,QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
- KeyboardState state;DesktopAdapter desktop;
+ KeyboardState state;DesktopAdapter desktop(nullptr,!qEnvironmentVariableIsSet("AGINO_MANAGED_UI"));
  if(QGuiApplication::platformName().startsWith("wayland")&&!desktop.capabilities().waylandReady()){qCritical().noquote()<<desktop.status();return 4;}
  if(qEnvironmentVariableIsSet("AGINO_MANAGED_UI")){
   auto parentWatcher=new QDBusServiceWatcher("org.agino.KeyboardUi1",bus,QDBusServiceWatcher::WatchForOwnerChange,&app);

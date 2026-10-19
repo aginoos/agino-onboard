@@ -35,6 +35,9 @@ public:
  qreal radius()const{return prefs_.compact()?8:12;}
  QStringList screenNames()const{return screens_;}void setScreenNames(const QStringList &s){if(screens_==s)return;screens_=s;settings_.updateScreens(s);requestUpdate();}
  bool transparencySupported()const{return transparency_;}void setTransparencySupported(bool);
+ // Embedded in the login and lock screens: no settings gear, no input method label and no Hide or Language key (the keyboard is
+ // always shown and there is no input method to switch); their places stay empty.
+ void setEmbedded(bool value){if(embedded_==value)return;embedded_=value;requestUpdate();}
  void measureNextFrame(const QElapsedTimer&,quint64);
  double firstFrameMilliseconds()const{return frameMs_;}quint64 firstFrameSerial()const{return frameMs_<0?0:frameSerial_;}
  QImage grabWindow();
@@ -56,7 +59,7 @@ private:
  Preferences &prefs_;FcitxClient &input_;KeyboardState &state_;QBackingStore store_;NativeX11Output x11Output_;NativeSettings settings_;NativeCandidateRows candidateRows_;
  QVector<NativeControl> controls_;QHash<int,Contact> contacts_;int dragOwner_=-999999;
  quint64 alternativeGeneration_=0,alternativeContext_=0;bool layoutCompact_=false;
- bool expanded_=false,functionRow_=false,transparency_=true,painting_=false;QStringList screens_;
+ bool expanded_=false,functionRow_=false,transparency_=true,painting_=false,embedded_=false;QStringList screens_;
  quint64 candidateContext_=0,candidateGeneration_=0;QStringList words_;qreal candidateOffset_=0,candidateContent_=0,expandedOffset_=0,expandedContent_=0;
  QTimer holdTimer_;QElapsedTimer pointerClock_;QStringList alternatives_;QRectF alternativeRect_;QString hovered_;
  QElapsedTimer frameStart_;quint64 frameSerial_=0;double frameMs_=-1;

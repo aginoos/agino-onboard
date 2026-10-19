@@ -22,7 +22,9 @@ class FcitxClient:public QObject {
  Q_PROPERTY(bool hasNext READ hasNext NOTIFY changed)
  Q_PROPERTY(QString status READ status NOTIFY changed)
 public:
- explicit FcitxClient(QObject *p=nullptr);
+ // Standalone: no input method (the keyboard of the login and lock screens, agino-keyboard-embed). The client is
+ // always connected and editable, never touches the session bus and has no input method name to show.
+ explicit FcitxClient(QObject *p=nullptr,bool standalone=false);
  bool connected()const{return standalone_||connected_;} bool editable()const{return standalone_||(editable_&&!externalPolicyPending_&&!policyPending()&&!(suspendConfigured_&&desiredSuspend_));}bool sensitive()const{return sensitive_||(safeConfigured_&&desiredSafe_);}
  quint64 contextEpoch()const{return context_;}quint64 candidateEpoch()const{return candidate_;}
  QString preedit()const{return preedit_;}QStringList candidates()const{return candidates_;}QString inputMethod()const{return im_;}QStringList inputMethods()const{return ims_;}bool hasNext()const{return next_;}bool hasPrev()const{return prev_;}bool paging()const{return paging_;}QString status()const{return status_;}
@@ -37,9 +39,8 @@ public:
  Q_INVOKABLE void setInputMethod(const QString &);
  Q_INVOKABLE void setSafeInput(bool);
  void refresh();void suspend(bool);void setPanelVisible(bool);
- // No input method: the keyboard of the login and lock screens (agino-keyboard-embed) is always connected and editable,
- // never talks to Fcitx5 and has no input method name to show.
- void setStandalone(bool value){standalone_=value;if(value)reconnectTimer_.stop();emit changed();}
+ // The physical key signal has no consumer in the programs; only the tests listen to it.
+ void subscribePhysicalKey();
  bool policyReady()const{return !policyPending();}
  void setPolicyBlocked(bool value){if(externalPolicyPending_==value)return;externalPolicyPending_=value;if(value){preedit_.clear();candidates_.clear();next_=prev_=false;}emit changed();}
 signals:
@@ -58,6 +59,6 @@ private:
  bool panelConfigured_=false,desiredPanelVisible_=false;
  bool safeConfigured_=false,suspendConfigured_=false,desiredSafe_=false,desiredSuspend_=false,policyInFlight_=false,policyRefreshPending_=false;
  quint64 policyRevision_=0,appliedPolicyRevision_=0;
- bool standalone_=false,connected_=false,editable_=false,sensitive_=false,next_=false,prev_=false,paging_=false,namesInFlight_=false;quint64 context_=0,candidate_=0;QString preedit_,im_,status_;QStringList candidates_,ims_;QVariantMap imNames_,imStatuses_,imLanguages_; quint64 generation_=0,pageRevision_=0;
+ bool standalone_=false,cleared_=false,connected_=false,editable_=false,sensitive_=false,next_=false,prev_=false,paging_=false,namesInFlight_=false;quint64 context_=0,candidate_=0;QString preedit_,im_,status_;QStringList candidates_,ims_;QVariantMap imNames_,imStatuses_,imLanguages_; quint64 generation_=0,pageRevision_=0;
  QTimer namesRetryTimer_,reconnectTimer_;int namesRetries_=0;quint64 namesRevision_=0;QString controllerOwner_;
 };

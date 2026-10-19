@@ -191,7 +191,7 @@ private slots:
   QSettings prefs("agino","agino-keyboard");const auto previousMode=prefs.value("mode"),previousShortcut=prefs.value("shortcut");
   prefs.setValue("mode",0);prefs.setValue("shortcut","Ctrl+Alt+K");prefs.sync();
   auto restore=qScopeGuard([&]{if(previousMode.isValid())prefs.setValue("mode",previousMode);else prefs.remove("mode");if(previousShortcut.isValid())prefs.setValue("shortcut",previousShortcut);else prefs.remove("shortcut");prefs.sync();});
-  FcitxClient client;QLineEdit target;focusTarget(target,client);QSignalSpy physical(&client,&FcitxClient::physicalKey);
+  FcitxClient client;client.subscribePhysicalKey();QLineEdit target;focusTarget(target,client);QSignalSpy physical(&client,&FcitxClient::physicalKey);
   auto display=XOpenDisplay(nullptr);QVERIFY(display);
   const auto ctrl=XKeysymToKeycode(display,XK_Control_L),alt=XKeysymToKeycode(display,XK_Alt_L),trigger=XKeysymToKeycode(display,XK_k);
   QProcess panel;auto cleanup=qScopeGuard([&]{for(auto code:{trigger,alt,ctrl})XTestFakeKeyEvent(display,code,False,CurrentTime);XSync(display,false);panel.terminate();panel.waitForFinished();XCloseDisplay(display);});
