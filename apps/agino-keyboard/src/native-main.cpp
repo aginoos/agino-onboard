@@ -180,7 +180,7 @@ int main(int argc,char **argv){
   const QString parentOwner=bus.interface()->serviceOwner("org.agino.KeyboardUi1").value();
   if(parentOwner.isEmpty())return 2;
   // Only the controller may drive the window and see its state (SEC-10); the window started by hand next to the controller counts as well.
-  if(!PeerCheck::peerIs(bus,parentOwner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(QCoreApplication::applicationDirPath()+"/agino-keyboard")})){qWarning("org.agino.KeyboardUi1 is owned by %s, which is not the keyboard controller",qPrintable(parentOwner));return 2;}
+  if(!PeerCheck::peerIs(bus,parentOwner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(QCoreApplication::applicationDirPath()+"/agino-keyboard"),programPath(QCoreApplication::applicationDirPath()+"/../bin/agino-keyboard")})){qWarning("org.agino.KeyboardUi1 is owned by %s, which is not the keyboard controller",qPrintable(parentOwner));return 2;}
   controllerName=parentOwner;
   QObject::connect(parentWatcher,&QDBusServiceWatcher::serviceOwnerChanged,&app,[&app,parentOwner](const QString &,const QString &,const QString &owner){if(owner!=parentOwner)app.quit();});
  }

@@ -14,8 +14,10 @@ static constexpr auto path="/org/agino/Keyboard1";
 static const QStringList fcitxPrograms{QStringLiteral("/usr/bin/fcitx5")};
 bool FcitxClient::trustedPeer(const QString &sender){
  const auto known=verdicts_.constFind(sender);if(known!=verdicts_.cend())return known.value();
- const bool trusted=PeerCheck::peerIs(QDBusConnection::sessionBus(),sender,fcitxPrograms);verdicts_.insert(sender,trusted);
- if(!trusted&&!sender.isEmpty()&&!warned_.contains(sender)){warned_.insert(sender);qWarning("Ignoring the bus connection %s: it is not Fcitx5 (/usr/bin/fcitx5)",qPrintable(sender));}
+ const int verdict=PeerCheck::check(QDBusConnection::sessionBus(),sender,fcitxPrograms);
+ if(verdict<0)return false;   // the program could not be found: not remembered, asked again next time
+ const bool trusted=verdict>0;verdicts_.insert(sender,trusted);
+ if(!trusted&&!warned_.contains(sender)){warned_.insert(sender);qWarning("Ignoring the bus connection %s: it is not Fcitx5 (/usr/bin/fcitx5)",qPrintable(sender));}
  return trusted;
 }
 FcitxClient::FcitxClient(QObject *p,bool standalone):QObject(p),standalone_(standalone){
@@ -38,12 +40,17 @@ void FcitxClient::ownerChanged(const QString &,const QString &,const QString &ow
 void FcitxClient::refresh(){
  if(standalone_)return;
  const auto gen=generation_,policy=appliedPolicyRevision_;auto bus=QDBusConnection::sessionBus();
- auto m=QDBusMessage::createMethodCall(service,path,service,"GetSnapshot");m.setAutoStartService(false);
+ // The owner of the bridge name is asked who it is before it is called; the calls go to its unique name, so the replies are its own
+ // (the sender of a reply is not set in the message QtDBus hands over).
+ const QString owner=bus.interface()?bus.interface()->serviceOwner(service).value():QString();
+ if(!owner.isEmpty()&&!trustedPeer(owner)){clear();return;}
+ const QString target=owner.isEmpty()?QString::fromLatin1(service):owner;
+ auto m=QDBusMessage::createMethodCall(target,path,service,"GetSnapshot");m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(bus.asyncCall(m,1500),this);
- connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,policy]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage||!trustedPeer(reply.service())){clear();return;}if(policy==policyRevision_&&policy==appliedPolicyRevision_)policyRefreshPending_=false;snapshot(reply);});
- auto ims=QDBusMessage::createMethodCall(service,path,service,"InputMethods");ims.setAutoStartService(false);
+ connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,policy,owner]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage){clear();return;}if(policy==policyRevision_&&policy==appliedPolicyRevision_)policyRefreshPending_=false;applySnapshot(reply,owner);});
+ auto ims=QDBusMessage::createMethodCall(target,path,service,"InputMethods");ims.setAutoStartService(false);
  auto iw=new QDBusPendingCallWatcher(bus.asyncCall(ims,1500),this);
- connect(iw,&QDBusPendingCallWatcher::finished,this,[this,iw,gen]{QDBusPendingReply<QStringList> r=*iw;iw->deleteLater();if(gen==generation_&&!r.isError()&&trustedPeer(iw->reply().service())){bool needsNames=ims_!=r.value()||imNames_.isEmpty();if(ims_!=r.value()){++namesRevision_;namesInFlight_=false;namesRetries_=0;namesRetryTimer_.stop();imNames_.clear();imStatuses_.clear();imLanguages_.clear();}ims_=r.value();emit changed();if(needsNames)requestInputMethodNames();}});
+ connect(iw,&QDBusPendingCallWatcher::finished,this,[this,iw,gen]{QDBusPendingReply<QStringList> r=*iw;iw->deleteLater();if(gen==generation_&&!r.isError()){bool needsNames=ims_!=r.value()||imNames_.isEmpty();if(ims_!=r.value()){++namesRevision_;namesInFlight_=false;namesRetries_=0;namesRetryTimer_.stop();imNames_.clear();imStatuses_.clear();imLanguages_.clear();}ims_=r.value();emit changed();if(needsNames)requestInputMethodNames();}});
 }
 void FcitxClient::refreshSnapshot(){if(!connected_){refresh();return;}policyRefreshPending_=true;emit changed();refresh();}
 void FcitxClient::controllerOwnerChanged(const QString &,const QString &,const QString &owner){verdicts_.clear();controllerOwner_=owner;++namesRevision_;namesRetryTimer_.stop();namesInFlight_=false;namesRetries_=0;imNames_.clear();imStatuses_.clear();imLanguages_.clear();emit changed();if(!owner.isEmpty())refreshInputMethodNames();}
@@ -58,7 +65,7 @@ void FcitxClient::requestInputMethodNames(){
  auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);
  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,revision,owner]{
   auto reply=w->reply();w->deleteLater();if(gen!=generation_||revision!=namesRevision_||owner!=controllerOwner_)return;namesInFlight_=false;
-  if(reply.type()==QDBusMessage::ErrorMessage||!trustedPeer(reply.service())||reply.arguments().size()!=1||reply.arguments().first().metaType()!=QMetaType::fromType<QDBusArgument>()){retryInputMethodNames();return;}
+  if(reply.type()==QDBusMessage::ErrorMessage||reply.arguments().size()!=1||reply.arguments().first().metaType()!=QMetaType::fromType<QDBusArgument>()){retryInputMethodNames();return;}
   const auto entries=qvariant_cast<QDBusArgument>(reply.arguments().first());QVariantMap names,statuses,languages;
   if(entries.currentSignature()!=QStringLiteral("a(ssssssb)")){retryInputMethodNames();return;}
   entries.beginArray();while(!entries.atEnd()){
@@ -79,14 +86,14 @@ void FcitxClient::retryInputMethodNames(){
  if(connected_&&!ims_.isEmpty()&&namesRetries_<3)namesRetryTimer_.start(500<<namesRetries_++);
  emit changed();
 }
-void FcitxClient::snapshot(const QDBusMessage &m){
+// The signal SnapshotChanged: only from the verified bridge connection.
+void FcitxClient::snapshot(const QDBusMessage &m){if(trustedPeer(m.service()))applySnapshot(m,m.service());}
+void FcitxClient::applySnapshot(const QDBusMessage &m,const QString &from){
  auto a=m.arguments();if(a.size()!=12)return;
- // A snapshot (signal or reply) from anything but Fcitx5's bridge is ignored: the keyboard stays as if the bridge were absent.
- if(!trustedPeer(m.service()))return;
  auto context=a[0].toULongLong(),candidate=a[1].toULongLong();
  if(context<context_||(context==context_&&candidate<candidate_))return;
  if(context!=context_){++pageRevision_;paging_=false;}
- bridge_=m.service();context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;cleared_=false;reconnectTimer_.stop();reconnectTimer_.setInterval(2000);
+ bridge_=from;context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;cleared_=false;reconnectTimer_.stop();reconnectTimer_.setInterval(2000);
  synchronizePolicy();
  if(!editable()||sensitive()){preedit_.clear();candidates_.clear();next_=prev_=false;}
  status_=editable()?(sensitive()?tr("Secure input"):QString()):tr("Select a text field first");emit changed();emit targetRect(a[10].toInt(),a[11].toInt());

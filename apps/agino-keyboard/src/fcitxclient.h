@@ -58,6 +58,8 @@ private:
  void controllerOwnerChanged(const QString &,const QString &,const QString &);
  // SEC-10: whether the unique bus name runs Fcitx5; one verdict per name (one round trip to the bus daemon), dropped when an owner changes.
  bool trustedPeer(const QString &);
+ // Takes a snapshot message that is known to come from the verified connection `from`.
+ void applySnapshot(const QDBusMessage &,const QString &from);
  // Where the calls to the bridge go: the verified connection once known, so a program that claims the name later gets nothing.
  QString bridge()const{return bridge_.isEmpty()?QString::fromLatin1("org.agino.Keyboard1"):bridge_;}
  QHash<QString,bool> verdicts_;QSet<QString> warned_;QString bridge_;

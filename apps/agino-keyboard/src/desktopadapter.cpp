@@ -25,21 +25,10 @@
 namespace {
 // SEC-20: a lock / screensaver signal counts only from the owner of the well-known name AND only when the program behind it is an
 // expected one (another program of the same user could otherwise claim the name and hide the keyboard / suspend Fcitx5).
-// One verdict per unique name (the latest owner only: a unique name is never reused); one warning per refused name.
-struct PeerGate{
- QString name;QStringList allowed;QString lastPeer;bool lastOk=false;QSet<QString> warned;
- bool accept(const QString &sender){
-  auto bus=QDBusConnection::sessionBus();auto *iface=bus.interface();if(sender.isEmpty()||!iface)return false;
-  const auto owner=iface->serviceOwner(name);if(!owner.isValid()||owner.value()!=sender)return false;
-  if(sender!=lastPeer){lastPeer=sender;lastOk=PeerCheck::peerIs(bus,sender,allowed);}
-  if(!lastOk&&!warned.contains(sender)){warned.insert(sender);qWarning().noquote()<<"Ignoring"<<name<<"signals from"<<sender<<"("<<PeerCheck::exeOf(bus,sender)<<"): not an expected program";}
-  return lastOk;
- }
-};
 // Programs seen behind the names on an installed agino desktop: dde-session (package dde-session) owns SessionManager1 and emits
 // LockedChanged; dde-session-daemon (dde-daemon) owns org.freedesktop.ScreenSaver.
-PeerGate sessionGate{"org.deepin.dde.SessionManager1",{"/usr/bin/dde-session"}};
-PeerGate saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
+PeerCheck::Gate sessionGate{"org.deepin.dde.SessionManager1",{"/usr/bin/dde-session"}};
+PeerCheck::Gate saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
 }
 DesktopAdapter::DesktopAdapter(QObject *p,bool trackInputSource):QObject(p){
  wayland_=QGuiApplication::platformName().startsWith("wayland");
@@ -47,17 +36,21 @@ DesktopAdapter::DesktopAdapter(QObject *p,bool trackInputSource):QObject(p){
  bus.connect("org.deepin.dde.SessionManager1","/org/deepin/dde/SessionManager1","org.deepin.dde.SessionManager1","LockedChanged",this,SLOT(sessionLock(bool,QDBusMessage)));
  bus.connect("org.freedesktop.ScreenSaver","/ScreenSaver","org.freedesktop.ScreenSaver","ActiveChanged",this,SLOT(screensaverFrom(bool,QDBusMessage)));
  QDBusConnection::systemBus().connect("org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","PrepareForSleep",this,SLOT(sleeping(bool)));
- auto m=QDBusMessage::createMethodCall("org.deepin.dde.SessionManager1","/org/deepin/dde/SessionManager1","org.freedesktop.DBus.Properties","Get");m.setArguments({"org.deepin.dde.SessionManager1","Locked"});m.setAutoStartService(false);
+ // The start snapshot is asked of the verified owner by its unique name (the sender of a reply is not set in the message QtDBus hands over).
+ const QString sessionOwner=bus.interface()?bus.interface()->serviceOwner("org.deepin.dde.SessionManager1").value():QString();
+ auto m=QDBusMessage::createMethodCall(sessionOwner.isEmpty()?QStringLiteral("org.deepin.dde.SessionManager1"):sessionOwner,"/org/deepin/dde/SessionManager1","org.freedesktop.DBus.Properties","Get");m.setArguments({"org.deepin.dde.SessionManager1","Locked"});m.setAutoStartService(false);
  auto *ownerWatcher=new QDBusServiceWatcher("org.deepin.dde.SessionManager1",bus,QDBusServiceWatcher::WatchForOwnerChange,this);
  connect(ownerWatcher,&QDBusServiceWatcher::serviceOwnerChanged,this,[this]{++lockRevision_;});
  const auto revision=lockRevision_;
- auto w=new QDBusPendingCallWatcher(bus.asyncCall(m,1000),this);
- connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,revision]{
-  QDBusPendingReply<QDBusVariant> r=*w;
-  // Never undo a newer lock signal or trust a snapshot from a replaced owner or from a program that is not the session manager.
-  if(!r.isError()&&revision==lockRevision_&&sessionGate.accept(w->reply().service()))lock(r.value().variant().toBool());
-  w->deleteLater();
- });
+ if(!sessionOwner.isEmpty()&&sessionGate.accept(QDBusConnection::sessionBus(),sessionOwner)){
+  auto w=new QDBusPendingCallWatcher(bus.asyncCall(m,1000),this);
+  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,revision]{
+   QDBusPendingReply<QDBusVariant> r=*w;
+   // Never undo a newer lock signal or trust a snapshot from a replaced owner.
+   if(!r.isError()&&revision==lockRevision_)lock(r.value().variant().toBool());
+   w->deleteLater();
+  });
+ }
  connect(qGuiApp,&QGuiApplication::screenRemoved,this,[this](QScreen *screen){if(screen==output_){emit outputChanged();setOutput(qGuiApp->primaryScreen());}});
  if(wayland_){detectWayland();return;}
  auto d=XOpenDisplay(nullptr);display_=d;if(!d)return;
@@ -162,8 +155,8 @@ auto d=static_cast<Display*>(display_);unsigned long values[12]={};Window ignore
 void DesktopAdapter::setPanelVisible(bool v){if(!window_)return;if(v){updateGeometry();if(wayland_)window_->setProperty(KeyboardWayland::ExclusiveZone,floating_?-1:window_->height());window_->show();if(!wayland_)strut(!floating_);}else{if(wayland_&&caps_.layer)window_->setProperty(KeyboardWayland::ExclusiveZone,0);else strut(false);window_->hide();}}
 QString DesktopAdapter::status()const{if(wayland_)return !caps_.waylandReady()?tr("The Wayland docking plugin or the layer-shell / text-input protocol is unavailable"):caps_.source?tr("Wayland: touch detection and manual activation are supported"):tr("Wayland: the input device cannot be identified, manual activation only");return caps_.source?tr("X11: touch detection and manual activation are supported"):tr("X11: the input device cannot be identified, manual activation only");}
 void DesktopAdapter::readXEvents(){auto d=static_cast<Display*>(display_);while(XPending(d)){XEvent event;XNextEvent(d,&event);if(event.type!=GenericEvent||event.xcookie.extension!=xiOpcode_||!XGetEventData(d,&event.xcookie))continue;auto raw=static_cast<XIRawEvent*>(event.xcookie.data);int count;auto info=XIQueryDevice(d,raw->sourceid,&count);bool synthetic=info&&count&&QByteArray(info[0].name).contains("XTEST");if(info)XIFreeDeviceInfo(info);if(!synthetic){if(event.xcookie.evtype==XI_RawTouchBegin)emit inputSourceChanged(KeyboardState::Touch);else if(event.xcookie.evtype==XI_RawKeyPress)emit inputSourceChanged(KeyboardState::PhysicalKeyboard);else if(event.xcookie.evtype==XI_RawButtonPress&&!(raw->flags&XIPointerEmulated))emit inputSourceChanged(KeyboardState::Mouse);}XFreeEventData(d,&event.xcookie);}}
-void DesktopAdapter::sessionLock(bool value,const QDBusMessage &message){if(sessionGate.accept(message.service()))lock(value);}
-void DesktopAdapter::screensaverFrom(bool value,const QDBusMessage &message){if(saverGate.accept(message.service()))screensaver(value);}
+void DesktopAdapter::sessionLock(bool value,const QDBusMessage &message){if(sessionGate.accept(QDBusConnection::sessionBus(),message.service()))lock(value);}
+void DesktopAdapter::screensaverFrom(bool value,const QDBusMessage &message){if(saverGate.accept(QDBusConnection::sessionBus(),message.service()))screensaver(value);}
 void DesktopAdapter::lock(bool v){++lockRevision_;locked_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
 void DesktopAdapter::sleeping(bool v){sleeping_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
 

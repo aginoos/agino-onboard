@@ -51,19 +51,6 @@ bool owner(const QDBusConnection &bus,const QString &name,const QDBusMessage &m)
  const auto reply=bus.interface()->serviceOwner(name);
  return reply.isValid()&&!reply.value().isEmpty()&&reply.value()==m.service();
 }
-// SEC-20: a lock / screensaver signal counts only from the owner of the well-known name AND only when the program behind it is an
-// expected one (another program of the same user could otherwise claim the name and make the controller hide the keyboard).
-// One verdict per unique name (the latest owner only: a unique name is never reused); one warning per refused name.
-struct PeerGate{
- QString name;QStringList allowed;QString lastPeer;bool lastOk=false;QSet<QString> warned;
- bool accept(const QDBusConnection &bus,const QString &sender){
-  auto *iface=bus.interface();if(sender.isEmpty()||!iface)return false;
-  const auto current=iface->serviceOwner(name);if(!current.isValid()||current.value()!=sender)return false;
-  if(sender!=lastPeer){lastPeer=sender;lastOk=PeerCheck::peerIs(bus,sender,allowed);}
-  if(!lastOk&&!warned.contains(sender)){warned.insert(sender);qWarning().noquote()<<"Ignoring"<<name<<"signals from"<<sender<<"("<<PeerCheck::exeOf(bus,sender)<<"): not an expected program";}
-  return lastOk;
- }
-};
 QDBusMessage method(const QString &service,const QString &path,const QString &interface,const QString &name,const QVariantList &args={}){
  auto m=QDBusMessage::createMethodCall(service,path,interface,name);m.setArguments(args);m.setAutoStartService(false);return m;
 }
@@ -84,7 +71,7 @@ struct IdlePlatform::Private: QDBusVirtualObject {
  bool wl=false,layer=false,text=false,source=false,locked=false,saver=false,sleep=false;
  // Programs seen behind the names on an installed agino desktop: dde-session (package dde-session) owns SessionManager1 and emits
  // LockedChanged; dde-session-daemon (dde-daemon) owns org.freedesktop.ScreenSaver.
- PeerGate sessionGate{session,{"/usr/bin/dde-session"}},saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
+ PeerCheck::Gate sessionGate{session,{"/usr/bin/dde-session"}},saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
  Display *display=nullptr;int opcode=0;QSocketNotifier *notifier=nullptr;
  QString shortcut,shortcutFailure,shortcutPath;quint64 generation=0;bool shortcutConfigured=false;quint64 lockRevision=0;
  explicit Private(IdlePlatform *p):QDBusVirtualObject(p),q(p){}
@@ -215,14 +202,18 @@ IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<P
  bus.connect(session,"/org/deepin/dde/SessionManager1",session,"LockedChanged",this,SLOT(lock(bool,QDBusMessage)));
  bus.connect("org.freedesktop.ScreenSaver","/ScreenSaver","org.freedesktop.ScreenSaver","ActiveChanged",this,SLOT(screensaver(bool,QDBusMessage)));
  QDBusConnection::systemBus().connect("org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","PrepareForSleep",this,SLOT(sleeping(bool,QDBusMessage)));
- auto *w=new QDBusPendingCallWatcher(bus.asyncCall(method(session,"/org/deepin/dde/SessionManager1","org.freedesktop.DBus.Properties","Get",{session,QStringLiteral("Locked")}),1000),this);
- const auto lockRevision=d->lockRevision;
- connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,lockRevision]{
-  QDBusPendingReply<QDBusVariant> reply=*w;
-  // A startup snapshot may arrive after a newer signal or owner replacement.
-  if(!reply.isError()&&lockRevision==d->lockRevision&&d->sessionGate.accept(d->bus,w->reply().service())){d->locked=reply.value().variant().toBool();d->publishLock();}
-  w->deleteLater();
- });
+ // The start snapshot is asked of the verified owner by its unique name (the sender of a reply is not set in the message QtDBus hands over).
+ const QString sessionOwner=bus.interface()?bus.interface()->serviceOwner(session).value():QString();
+ if(!sessionOwner.isEmpty()&&d->sessionGate.accept(bus,sessionOwner)){
+  auto *w=new QDBusPendingCallWatcher(bus.asyncCall(method(sessionOwner,"/org/deepin/dde/SessionManager1","org.freedesktop.DBus.Properties","Get",{session,QStringLiteral("Locked")}),1000),this);
+  const auto lockRevision=d->lockRevision;
+  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,lockRevision]{
+   QDBusPendingReply<QDBusVariant> reply=*w;
+   // A startup snapshot may arrive after a newer signal or owner replacement.
+   if(!reply.isError()&&lockRevision==d->lockRevision){d->locked=reply.value().variant().toBool();d->publishLock();}
+   w->deleteLater();
+  });
+ }
  if(d->wl){
   auto *display=wl_display_connect(nullptr);
   if(display){auto *registry=wl_display_get_registry(display);static const wl_registry_listener listener={[](void *data,wl_registry*,uint32_t,const char *name,uint32_t){auto *p=static_cast<Private*>(data);QByteArray n(name);if(n=="zwlr_layer_shell_v1")p->layer=true;if(n=="zwp_text_input_manager_v1"||n=="zwp_text_input_manager_v2"||n=="zwp_text_input_manager_v3")p->text=true;},[](void*,wl_registry*,uint32_t){}};wl_registry_add_listener(registry,&listener,d.get());wl_display_roundtrip(display);wl_registry_destroy(registry);wl_display_disconnect(display);}

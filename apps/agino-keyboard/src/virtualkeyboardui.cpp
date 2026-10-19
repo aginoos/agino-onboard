@@ -22,7 +22,9 @@ bool VirtualKeyboardUi::trusted()const{
  const QString sender=message().service();
  if(!owner.isValid()||sender!=owner.value())return false;
  const auto known=verdicts_.constFind(sender);if(known!=verdicts_.cend())return known.value();
- const bool ok=PeerCheck::peerIs(connection(),sender,{QStringLiteral("/usr/bin/fcitx5")});verdicts_.insert(sender,ok);
+ const int verdict=PeerCheck::check(connection(),sender,{QStringLiteral("/usr/bin/fcitx5")});
+ if(verdict<0)return false;   // not found: not remembered
+ const bool ok=verdict>0;verdicts_.insert(sender,ok);
  if(!ok)qWarning("Ignoring the bus connection %s: it owns org.fcitx.Fcitx5 but is not /usr/bin/fcitx5",qPrintable(sender));
  return ok;
 }

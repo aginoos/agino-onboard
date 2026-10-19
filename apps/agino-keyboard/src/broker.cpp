@@ -79,7 +79,7 @@ public:
  ~Broker()override{if(worker.state()!=QProcess::NotRunning){worker.terminate();if(!worker.waitForFinished(3000)){worker.kill();worker.waitForFinished(1000);}}}
  void setCapture(QString path){capture=path;}
  void compositorShow(){client.refreshSnapshot();}
- void compositorHide(){client.refreshSnapshot();if(worker.state()!=QProcess::NotRunning)relay("CompositorHide");}
+ void compositorHide(){client.refreshSnapshot();if(ready&&!retiring)relay("CompositorHide");}
 public slots:
  void WorkerReady(){
   if(calledFromDBus()&&worker.state()!=QProcess::NotRunning&&fromWorker(message().service())){workerName=message().service();ready=true;dispatchPending();}
@@ -118,7 +118,9 @@ private:
   const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);
   if(!owner.isValid()||sender!=owner.value())return false;
   const auto known=verdicts.constFind(sender);if(known!=verdicts.cend())return known.value();
-  const bool ok=PeerCheck::peerIs(QDBusConnection::sessionBus(),sender,{programPath(QStringLiteral(AGINO_TRUSTED_UI)),workerExe});verdicts.insert(sender,ok);
+  const int verdict=PeerCheck::check(QDBusConnection::sessionBus(),sender,{programPath(QStringLiteral(AGINO_TRUSTED_UI)),workerExe});
+  if(verdict<0)return false;   // the program could not be found: not remembered, asked again next time
+  const bool ok=verdict>0;verdicts.insert(sender,ok);
   if(!ok)qWarning("Ignoring the bus connection %s: it owns %s but is not the keyboard window program",qPrintable(sender),workerService);
   return ok;
  }
@@ -188,7 +190,7 @@ int main(int argc,char **argv){
  if(!bus.registerService(publicService)){
   // Another instance runs: ask it to show the keyboard, but only when it is the controller (SEC-10); anything else holding the name gets nothing.
   const QString owner=bus.interface()->serviceOwner(publicService).value();
-  if(!owner.isEmpty()&&!PeerCheck::peerIs(bus,owner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(app.applicationFilePath())})){qWarning("%s is owned by %s, which is not the keyboard controller: not using it",publicService,qPrintable(owner));return 3;}
+  if(!owner.isEmpty()&&!PeerCheck::peerIs(bus,owner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(app.applicationFilePath())})){qWarning("%s is owned by %s, which is not the keyboard controller: not using it",publicService,qPrintable(owner));return 2;}
   auto m=QDBusMessage::createMethodCall(owner.isEmpty()?QString::fromLatin1(publicService):owner,uiPath,uiInterface,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;
  }
  VirtualKeyboardUi ui;if(!ui.start()){errorDialog(QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}

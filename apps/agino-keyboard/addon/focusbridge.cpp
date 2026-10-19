@@ -105,10 +105,10 @@ public:
   if(testHooks_){changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));return;}
   for(const auto &dest:subscribers_)std::apply([&](const auto &...args){changedTo(dest,args...);},s);
  }
- // Exported GetSnapshot: every caller gets the same shape, but only trusted callers get the content (and are subscribed to SnapshotChanged).
+ // Exported GetSnapshot: only trusted callers get the content (and are subscribed to SnapshotChanged); the others get an access denied error.
  // The trust check is here, not in getSnapshot(), because notify() calls that without a message; an untrusted caller must not trigger its side effects either.
  Snapshot querySnapshot(){
-  if(!trusted())return Snapshot{0,0,false,false,"","",std::vector<std::string>{},false,false,"unknown",0,0};
+  if(!trusted())throw dbus::MethodCallError("org.freedesktop.DBus.Error.AccessDenied","only the keyboard programs may read the snapshot");
   subscribers_.insert(currentMessage()->sender());
   return getSnapshot();
  }
