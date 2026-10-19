@@ -24,7 +24,7 @@ public slots:void lock(bool);void screensaver(bool);void sleeping(bool);void dev
 public:QScreen *targetOutput()const;
 protected:bool eventFilter(QObject *,QEvent *)override;
 private slots:
- void sessionLock(bool,const QDBusMessage &);
+ void sessionLock(bool,const QDBusMessage &);void screensaverFrom(bool,const QDBusMessage &);   // bus connections: sender and program checked (SEC-20)
 private:
  quint64 lockRevision_=0;
  void readXEvents();void strut(bool);void detectWayland();

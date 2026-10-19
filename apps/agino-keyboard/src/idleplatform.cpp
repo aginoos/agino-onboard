@@ -12,8 +12,11 @@
 #include <QDBusServiceWatcher>
 #include <QDBusVariant>
 #include <QDBusVirtualObject>
+#include <QDebug>
+#include <QSet>
 #include <QSocketNotifier>
 #include <QTimer>
+#include "peercheck.h"
 #include <QVariantMap>
 #include <cmath>
 #include <wayland-client.h>
@@ -48,6 +51,19 @@ bool owner(const QDBusConnection &bus,const QString &name,const QDBusMessage &m)
  const auto reply=bus.interface()->serviceOwner(name);
  return reply.isValid()&&!reply.value().isEmpty()&&reply.value()==m.service();
 }
+// SEC-20: a lock / screensaver signal counts only from the owner of the well-known name AND only when the program behind it is an
+// expected one (another program of the same user could otherwise claim the name and make the controller hide the keyboard).
+// One verdict per unique name (the latest owner only: a unique name is never reused); one warning per refused name.
+struct PeerGate{
+ QString name;QStringList allowed;QString lastPeer;bool lastOk=false;QSet<QString> warned;
+ bool accept(const QDBusConnection &bus,const QString &sender){
+  auto *iface=bus.interface();if(sender.isEmpty()||!iface)return false;
+  const auto current=iface->serviceOwner(name);if(!current.isValid()||current.value()!=sender)return false;
+  if(sender!=lastPeer){lastPeer=sender;lastOk=PeerCheck::peerIs(bus,sender,allowed);}
+  if(!lastOk&&!warned.contains(sender)){warned.insert(sender);qWarning().noquote()<<"Ignoring"<<name<<"signals from"<<sender<<"("<<PeerCheck::exeOf(bus,sender)<<"): not an expected program";}
+  return lastOk;
+ }
+};
 QDBusMessage method(const QString &service,const QString &path,const QString &interface,const QString &name,const QVariantList &args={}){
  auto m=QDBusMessage::createMethodCall(service,path,interface,name);m.setArguments(args);m.setAutoStartService(false);return m;
 }
@@ -66,6 +82,9 @@ struct IdlePlatform::Private: QDBusVirtualObject {
  IdlePlatform *q;
  QDBusConnection bus=QDBusConnection::sessionBus();
  bool wl=false,layer=false,text=false,source=false,locked=false,saver=false,sleep=false;
+ // Programs seen behind the names on an installed agino desktop: dde-session (package dde-session) owns SessionManager1 and emits
+ // LockedChanged; dde-session-daemon (dde-daemon) owns org.freedesktop.ScreenSaver.
+ PeerGate sessionGate{session,{"/usr/bin/dde-session"}},saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
  Display *display=nullptr;int opcode=0;QSocketNotifier *notifier=nullptr;
  QString shortcut,shortcutFailure,shortcutPath;quint64 generation=0;bool shortcutConfigured=false;quint64 lockRevision=0;
  explicit Private(IdlePlatform *p):QDBusVirtualObject(p),q(p){}
@@ -201,7 +220,7 @@ IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<P
  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,lockRevision]{
   QDBusPendingReply<QDBusVariant> reply=*w;
   // A startup snapshot may arrive after a newer signal or owner replacement.
-  if(!reply.isError()&&lockRevision==d->lockRevision&&owner(d->bus,session,w->reply())){d->locked=reply.value().variant().toBool();d->publishLock();}
+  if(!reply.isError()&&lockRevision==d->lockRevision&&d->sessionGate.accept(d->bus,w->reply().service())){d->locked=reply.value().variant().toBool();d->publishLock();}
   w->deleteLater();
  });
  if(d->wl){
@@ -229,8 +248,8 @@ QString IdlePlatform::status()const{
 }
 QString IdlePlatform::shortcutError()const{return d->shortcutFailure;}
 void IdlePlatform::setShortcut(QString text){if(d->shortcutConfigured&&d->shortcut==text)return;d->shortcutConfigured=true;d->shortcut=text;d->bindShortcut();}
-void IdlePlatform::lock(bool value,const QDBusMessage &m){if(owner(d->bus,session,m)){++d->lockRevision;d->locked=value;d->publishLock();}}
-void IdlePlatform::screensaver(bool value,const QDBusMessage &m){if(owner(d->bus,"org.freedesktop.ScreenSaver",m)){d->saver=value;d->publishLock();}}
+void IdlePlatform::lock(bool value,const QDBusMessage &m){if(d->sessionGate.accept(d->bus,m.service())){++d->lockRevision;d->locked=value;d->publishLock();}}
+void IdlePlatform::screensaver(bool value,const QDBusMessage &m){if(d->saverGate.accept(d->bus,m.service())){d->saver=value;d->publishLock();}}
 void IdlePlatform::sleeping(bool value,const QDBusMessage &m){if(owner(QDBusConnection::systemBus(),"org.freedesktop.login1",m)){d->sleep=value;d->publishLock();}}
 void IdlePlatform::deviceSource(uint kind,double x,double y,const QDBusMessage &m){if(kind>=1&&kind<=4&&std::isfinite(x)&&std::isfinite(y)&&owner(d->bus,device,m))emit sourceChanged(int(kind),x,y);}
 void IdlePlatform::shortcutPressed(const QString &app,const QString &name,qlonglong,const QDBusMessage &m){if(app==component&&name==action&&m.path()==d->shortcutPath&&owner(d->bus,accel,m))emit toggleRequested();}

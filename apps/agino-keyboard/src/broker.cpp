@@ -24,9 +24,12 @@
 #include "preferences.h"
 #include "startupconfig.h"
 #include "idleplatform.h"
+#include "peercheck.h"
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
+// The path of a program as /proc/<pid>/exe shows it (links resolved); the path itself when the file is not there.
+static QString programPath(const QString &path){const QString real=QFileInfo(path).canonicalFilePath();return real.isEmpty()?path:real;}
 static constexpr auto publicService="org.agino.KeyboardUi1";
 static constexpr auto workerService="org.agino.KeyboardPanel1";
 static constexpr auto uiInterface="org.agino.KeyboardUi1";
@@ -41,7 +44,7 @@ public:
   connect(&worker,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus kind){
    const bool restart=retiring&&((code==0&&kind==QProcess::NormalExit)||retireKilled)&&!pending.isEmpty();retireKilled=false;
    if(!restart)pending.clear();
-   retireTimer.stop();unanswered=0;ready=false;retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
+   retireTimer.stop();unanswered=0;ready=false;workerName.clear();retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
    state.dismiss();if(code||kind==QProcess::CrashExit)cached["workerError"]=tr("The keyboard window has exited; show it again to restart it");
    if(restart)QTimer::singleShot(0,this,[this]{startWorker();});
    if(!capture.isEmpty())QCoreApplication::exit(code==0&&QFileInfo::exists(capture)?0:2);
@@ -79,13 +82,12 @@ public:
  void compositorHide(){client.refreshSnapshot();if(worker.state()!=QProcess::NotRunning)relay("CompositorHide");}
 public slots:
  void WorkerReady(){
-  const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);
-  if(calledFromDBus()&&worker.state()!=QProcess::NotRunning&&owner.isValid()&&message().service()==owner.value()){ready=true;dispatchPending();}
+  if(calledFromDBus()&&worker.state()!=QProcess::NotRunning&&fromWorker(message().service())){workerName=message().service();ready=true;dispatchPending();}
  }
  QVariantMap Status(){
   if(ready&&!retiring&&calledFromDBus()){
    auto requestMessage=message();auto connectionCopy=connection();setDelayedReply(true);
-   auto m=QDBusMessage::createMethodCall(workerService,uiPath,uiInterface,"Status");
+   auto m=QDBusMessage::createMethodCall(workerTarget(),uiPath,uiInterface,"Status");
    auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,3000),this);
    connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,requestMessage,connectionCopy]{QDBusPendingReply<QVariantMap> r=*watcher;watcher->deleteLater();if(!r.isError())updateCache(r.value());connectionCopy.send(requestMessage.createReply(QVariantList{status()}));});
    return {};
@@ -102,13 +104,24 @@ public slots:
  void MoveBy(double x,double y){if(ready&&!retiring)relay("MoveBy",{x,y});}
  void Resize(){if(ready&&!retiring)relay("Resize");}
  bool ReleaseIdle(const QVariantMap &value){
-  auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);
-  if(!calledFromDBus()||!owner.isValid()||message().service()!=owner.value()||activeRequests)return false;
+  if(!calledFromDBus()||!fromWorker(message().service())||activeRequests)return false;
   updateCache(value);if(cached.value("visible").toBool())return false;
   resume=value;resume["resuming"]=true;retiring=true;retireTimer.start();return true;
  }
- void workerState(const QVariantMap &value,const QDBusMessage &signal){const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);if(owner.isValid()&&signal.service()==owner.value())updateCache(value);}
+ void workerState(const QVariantMap &value,const QDBusMessage &signal){if(fromWorker(signal.service()))updateCache(value);}
 private:
+ // Calls go to the verified connection once the window has said it is ready (the name may change hands afterwards).
+ QString workerTarget()const{return workerName.isEmpty()?QString::fromLatin1(workerService):workerName;}
+ // SEC-10: the sender owns the name of the keyboard window and runs the keyboard window program (or the one started by this process);
+ // one verdict per unique name, forgotten when a window is started.
+ bool fromWorker(const QString &sender){
+  const auto owner=QDBusConnection::sessionBus().interface()->serviceOwner(workerService);
+  if(!owner.isValid()||sender!=owner.value())return false;
+  const auto known=verdicts.constFind(sender);if(known!=verdicts.cend())return known.value();
+  const bool ok=PeerCheck::peerIs(QDBusConnection::sessionBus(),sender,{programPath(QStringLiteral(AGINO_TRUSTED_UI)),workerExe});verdicts.insert(sender,ok);
+  if(!ok)qWarning("Ignoring the bus connection %s: it owns %s but is not the keyboard window program",qPrintable(sender),workerService);
+  return ok;
+ }
  QVariantMap status()const{
   auto value=cached;for(auto k:{"visible","settingsVisible","viewCreated","panelLoaded","expanded","transparencySupported"})if(!value.contains(k))value[k]=false;for(auto k:{"panelX","panelY","panelWidth","panelHeight","graphicsApi","showSerial","firstFrameSerial"})if(!value.contains(k))value[k]=0;const bool alive=worker.state()!=QProcess::NotRunning;
   value["workerPid"]=alive?worker.processId():qint64(0);value["workerPids"]=QVariant::fromValue(alive?QList<qlonglong>{worker.processId()}:QList<qlonglong>{});
@@ -139,6 +152,7 @@ private:
   ++workerGeneration;ready=false;retiring=false;cached["workerError"]=QString();
   QString executable=QCoreApplication::applicationDirPath()+"/agino-keyboard-ui";
   if(!QFileInfo::exists(executable))executable=QCoreApplication::applicationDirPath()+"/../libexec/agino-keyboard-ui";
+  workerExe=programPath(executable);verdicts.clear();workerName.clear();
   auto env=QProcessEnvironment::systemEnvironment();env.insert("AGINO_MANAGED_UI","1");
   auto handoff=resume;handoff["sourceKind"]=sourceKind;handoff["sourceX"]=sourceX;handoff["sourceY"]=sourceY;
   env.insert("AGINO_UI_RESUME",QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(handoff)).toJson(QJsonDocument::Compact)));
@@ -148,7 +162,7 @@ private:
  }
  void dispatchPending(){if(pending.isEmpty())return;auto action=pending;pending.clear();relay(action);}
  void relay(const QString &method,const QVariantList &arguments={}){
-  auto m=QDBusMessage::createMethodCall(workerService,uiPath,uiInterface,method);m.setArguments(arguments);++activeRequests;const auto generation=workerGeneration;
+  auto m=QDBusMessage::createMethodCall(workerTarget(),uiPath,uiInterface,method);m.setArguments(arguments);++activeRequests;const auto generation=workerGeneration;
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,10000),this);
   connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,generation]{
    QDBusPendingReply<> reply=*watcher;watcher->deleteLater();--activeRequests;
@@ -161,7 +175,7 @@ private:
   });
  }
  Preferences &prefs;FcitxClient &client;IdlePlatform &platform;KeyboardState state;QProcess worker;QFileSystemWatcher files;QTimer reload,retireTimer;
- QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,unanswered=0,sourceKind=0;quint64 workerGeneration=0;bool retireKilled=false;double sourceX=0,sourceY=0;
+ QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,unanswered=0,sourceKind=0;quint64 workerGeneration=0;bool retireKilled=false;double sourceX=0,sourceY=0;QHash<QString,bool> verdicts;QString workerExe,workerName;
 };
 static void errorDialog(const QString &message){
  QString path=QCoreApplication::applicationDirPath()+"/agino-keyboard-ui";if(!QFileInfo::exists(path))path=QCoreApplication::applicationDirPath()+"/../libexec/agino-keyboard-ui";
@@ -170,7 +184,13 @@ static void errorDialog(const QString &message){
 int main(int argc,char **argv){
  QCoreApplication app(argc,argv);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");AginoI18n::install(app);
  bool hidden=false,settings=false;QString capture;for(int i=1;i<argc;++i){QByteArray a(argv[i]);hidden|=a=="--hidden";settings|=a=="--settings";if(a=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))capture=QString::fromLocal8Bit(argv[++i]);}
- auto bus=QDBusConnection::sessionBus();if(!bus.registerService(publicService)){auto m=QDBusMessage::createMethodCall(publicService,uiPath,uiInterface,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
+ auto bus=QDBusConnection::sessionBus();
+ if(!bus.registerService(publicService)){
+  // Another instance runs: ask it to show the keyboard, but only when it is the controller (SEC-10); anything else holding the name gets nothing.
+  const QString owner=bus.interface()->serviceOwner(publicService).value();
+  if(!owner.isEmpty()&&!PeerCheck::peerIs(bus,owner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(app.applicationFilePath())})){qWarning("%s is owned by %s, which is not the keyboard controller: not using it",publicService,qPrintable(owner));return 3;}
+  auto m=QDBusMessage::createMethodCall(owner.isEmpty()?QString::fromLatin1(publicService):owner,uiPath,uiInterface,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;
+ }
  VirtualKeyboardUi ui;if(!ui.start()){errorDialog(QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}
  if(ui.ownsInterface()){
   const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");

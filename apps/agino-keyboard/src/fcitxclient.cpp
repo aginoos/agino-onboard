@@ -7,8 +7,17 @@
 #include <QTimer>
 #include <QLocale>
 #include <memory>
+#include "peercheck.h"
 static constexpr auto service="org.agino.Keyboard1";
 static constexpr auto path="/org/agino/Keyboard1";
+// Debian's Fcitx5 is in /usr/bin whatever the install prefix of this package is.
+static const QStringList fcitxPrograms{QStringLiteral("/usr/bin/fcitx5")};
+bool FcitxClient::trustedPeer(const QString &sender){
+ const auto known=verdicts_.constFind(sender);if(known!=verdicts_.cend())return known.value();
+ const bool trusted=PeerCheck::peerIs(QDBusConnection::sessionBus(),sender,fcitxPrograms);verdicts_.insert(sender,trusted);
+ if(!trusted&&!sender.isEmpty()&&!warned_.contains(sender)){warned_.insert(sender);qWarning("Ignoring the bus connection %s: it is not Fcitx5 (/usr/bin/fcitx5)",qPrintable(sender));}
+ return trusted;
+}
 FcitxClient::FcitxClient(QObject *p,bool standalone):QObject(p),standalone_(standalone){
  if(standalone_)return;
  namesRetryTimer_.setSingleShot(true);
@@ -24,30 +33,32 @@ FcitxClient::FcitxClient(QObject *p,bool standalone):QObject(p),standalone_(stan
  QTimer::singleShot(0,this,&FcitxClient::refresh);
 }
 void FcitxClient::subscribePhysicalKey(){if(!standalone_)QDBusConnection::sessionBus().connect(service,path,service,"PhysicalKey",this,SIGNAL(physicalKey()));}
-void FcitxClient::clear(){const bool wasCleared=cleared_;cleared_=true;reconnectTimer_.start();++pageRevision_;++generation_;++namesRevision_;appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("Waiting for the Fcitx5 screen keyboard plugin");if(!wasCleared)emit changed();}
-void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){++generation_;reconnectTimer_.setInterval(2000);clear();if(!owner.isEmpty())refresh();}
+void FcitxClient::clear(){const bool wasCleared=cleared_;cleared_=true;reconnectTimer_.start();++pageRevision_;++generation_;++namesRevision_;appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;bridge_.clear();context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("Waiting for the Fcitx5 screen keyboard plugin");if(!wasCleared)emit changed();}
+void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){verdicts_.clear();++generation_;reconnectTimer_.setInterval(2000);clear();if(!owner.isEmpty())refresh();}
 void FcitxClient::refresh(){
  if(standalone_)return;
  const auto gen=generation_,policy=appliedPolicyRevision_;auto bus=QDBusConnection::sessionBus();
  auto m=QDBusMessage::createMethodCall(service,path,service,"GetSnapshot");m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(bus.asyncCall(m,1500),this);
- connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,policy]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage){clear();return;}if(policy==policyRevision_&&policy==appliedPolicyRevision_)policyRefreshPending_=false;snapshot(reply);});
+ connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,policy]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage||!trustedPeer(reply.service())){clear();return;}if(policy==policyRevision_&&policy==appliedPolicyRevision_)policyRefreshPending_=false;snapshot(reply);});
  auto ims=QDBusMessage::createMethodCall(service,path,service,"InputMethods");ims.setAutoStartService(false);
  auto iw=new QDBusPendingCallWatcher(bus.asyncCall(ims,1500),this);
- connect(iw,&QDBusPendingCallWatcher::finished,this,[this,iw,gen]{QDBusPendingReply<QStringList> r=*iw;iw->deleteLater();if(gen==generation_&&!r.isError()){bool needsNames=ims_!=r.value()||imNames_.isEmpty();if(ims_!=r.value()){++namesRevision_;namesInFlight_=false;namesRetries_=0;namesRetryTimer_.stop();imNames_.clear();imStatuses_.clear();imLanguages_.clear();}ims_=r.value();emit changed();if(needsNames)requestInputMethodNames();}});
+ connect(iw,&QDBusPendingCallWatcher::finished,this,[this,iw,gen]{QDBusPendingReply<QStringList> r=*iw;iw->deleteLater();if(gen==generation_&&!r.isError()&&trustedPeer(iw->reply().service())){bool needsNames=ims_!=r.value()||imNames_.isEmpty();if(ims_!=r.value()){++namesRevision_;namesInFlight_=false;namesRetries_=0;namesRetryTimer_.stop();imNames_.clear();imStatuses_.clear();imLanguages_.clear();}ims_=r.value();emit changed();if(needsNames)requestInputMethodNames();}});
 }
 void FcitxClient::refreshSnapshot(){if(!connected_){refresh();return;}policyRefreshPending_=true;emit changed();refresh();}
-void FcitxClient::controllerOwnerChanged(const QString &,const QString &,const QString &owner){controllerOwner_=owner;++namesRevision_;namesRetryTimer_.stop();namesInFlight_=false;namesRetries_=0;imNames_.clear();imStatuses_.clear();imLanguages_.clear();emit changed();if(!owner.isEmpty())refreshInputMethodNames();}
+void FcitxClient::controllerOwnerChanged(const QString &,const QString &,const QString &owner){verdicts_.clear();controllerOwner_=owner;++namesRevision_;namesRetryTimer_.stop();namesInFlight_=false;namesRetries_=0;imNames_.clear();imStatuses_.clear();imLanguages_.clear();emit changed();if(!owner.isEmpty())refreshInputMethodNames();}
 void FcitxClient::refreshInputMethodNames(){++namesRevision_;namesRetries_=0;namesRetryTimer_.stop();namesInFlight_=false;imNames_.clear();imStatuses_.clear();imLanguages_.clear();emit changed();refresh();}
 void FcitxClient::requestInputMethodNames(){
  if(namesInFlight_||ims_.isEmpty())return;
  namesRetryTimer_.stop();
+ // Only the verified owner of the controller name gets the call, by its unique name.
+ if(!trustedPeer(controllerOwner_)){retryInputMethodNames();return;}
  namesInFlight_=true;
- const auto gen=generation_,revision=namesRevision_;const auto owner=controllerOwner_;auto m=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","AvailableInputMethods");m.setAutoStartService(false);
+ const auto gen=generation_,revision=namesRevision_;const auto owner=controllerOwner_;auto m=QDBusMessage::createMethodCall(owner.isEmpty()?QStringLiteral("org.fcitx.Fcitx5"):owner,"/controller","org.fcitx.Fcitx.Controller1","AvailableInputMethods");m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);
  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,revision,owner]{
   auto reply=w->reply();w->deleteLater();if(gen!=generation_||revision!=namesRevision_||owner!=controllerOwner_)return;namesInFlight_=false;
-  if(reply.type()==QDBusMessage::ErrorMessage||reply.arguments().size()!=1||reply.arguments().first().metaType()!=QMetaType::fromType<QDBusArgument>()){retryInputMethodNames();return;}
+  if(reply.type()==QDBusMessage::ErrorMessage||!trustedPeer(reply.service())||reply.arguments().size()!=1||reply.arguments().first().metaType()!=QMetaType::fromType<QDBusArgument>()){retryInputMethodNames();return;}
   const auto entries=qvariant_cast<QDBusArgument>(reply.arguments().first());QVariantMap names,statuses,languages;
   if(entries.currentSignature()!=QStringLiteral("a(ssssssb)")){retryInputMethodNames();return;}
   entries.beginArray();while(!entries.atEnd()){
@@ -70,25 +81,27 @@ void FcitxClient::retryInputMethodNames(){
 }
 void FcitxClient::snapshot(const QDBusMessage &m){
  auto a=m.arguments();if(a.size()!=12)return;
+ // A snapshot (signal or reply) from anything but Fcitx5's bridge is ignored: the keyboard stays as if the bridge were absent.
+ if(!trustedPeer(m.service()))return;
  auto context=a[0].toULongLong(),candidate=a[1].toULongLong();
  if(context<context_||(context==context_&&candidate<candidate_))return;
  if(context!=context_){++pageRevision_;paging_=false;}
- context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;cleared_=false;reconnectTimer_.stop();reconnectTimer_.setInterval(2000);
+ bridge_=m.service();context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;cleared_=false;reconnectTimer_.stop();reconnectTimer_.setInterval(2000);
  synchronizePolicy();
  if(!editable()||sensitive()){preedit_.clear();candidates_.clear();next_=prev_=false;}
  status_=editable()?(sensitive()?tr("Secure input"):QString()):tr("Select a text field first");emit changed();emit targetRect(a[10].toInt(),a[11].toInt());
 }
-void FcitxClient::call(const QString &method,const QVariantList &args){if(!connected_)return;auto m=QDBusMessage::createMethodCall(service,path,service,method);m.setArguments(args);m.setAutoStartService(false);auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);auto gen=generation_;connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage){clear();} });}
+void FcitxClient::call(const QString &method,const QVariantList &args){if(!connected_)return;auto m=QDBusMessage::createMethodCall(bridge(),path,service,method);m.setArguments(args);m.setAutoStartService(false);auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);auto gen=generation_;connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage){clear();} });}
 bool FcitxClient::sendKey(KeySpec k,bool release,quint64 epoch){if(!editable()||epoch!=context_)return false;call("SendKey",{k.sym,k.code,k.modifiers,release,QVariant::fromValue(epoch)});return true;}
 void FcitxClient::selectCandidate(int index,quint64 epoch,quint64 candidate){
  if(!editable()||sensitive()||epoch!=context_||candidate!=candidate_||index<0||index>=candidates_.size())return;
- auto m=QDBusMessage::createMethodCall(service,path,service,"SelectCandidate");m.setArguments({index,QVariant::fromValue(epoch),QVariant::fromValue(candidate)});m.setAutoStartService(false);
+ auto m=QDBusMessage::createMethodCall(bridge(),path,service,"SelectCandidate");m.setArguments({index,QVariant::fromValue(epoch),QVariant::fromValue(candidate)});m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);auto gen=generation_;connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen]{QDBusPendingReply<bool> r=*w;w->deleteLater();if(gen!=generation_)return;if(r.isError()){clear();return;}if(r.value())emit candidateSelected();});
 }
 void FcitxClient::requestPage(bool next){
  if(!editable()||sensitive()||paging_||(next?!next_:!prev_))return;
  paging_=true;const auto revision=++pageRevision_;emit changed();
- auto m=QDBusMessage::createMethodCall(service,path,service,"RequestPage");const auto context=context_,candidate=candidate_;
+ auto m=QDBusMessage::createMethodCall(bridge(),path,service,"RequestPage");const auto context=context_,candidate=candidate_;
  m.setArguments({next,QVariant::fromValue(context),QVariant::fromValue(candidate)});m.setAutoStartService(false);
  auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);auto gen=generation_;
  connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,revision,context,candidate]{
@@ -120,7 +133,7 @@ void FcitxClient::synchronizePolicy(){
  auto batch=std::make_shared<Batch>();
  batch->remaining=int(safeConfigured_)+int(suspendConfigured_)+int(panelConfigured_);
  auto send=[this,gen,revision,batch](const QString &method,bool value){
-  auto m=QDBusMessage::createMethodCall(service,path,service,method);m.setArguments({value});m.setAutoStartService(false);
+  auto m=QDBusMessage::createMethodCall(bridge(),path,service,method);m.setArguments({value});m.setAutoStartService(false);
   auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);
   connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen,revision,batch]{
    const auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;

@@ -67,6 +67,8 @@ target_include_directories(idle-platform PUBLIC src)
 target_link_libraries(idle-platform PUBLIC Qt6::Core Qt6::DBus X11::X11 X11::Xi PkgConfig::WAYLAND)
 add_executable(agino-keyboard src/broker.cpp src/preferences.h)
 target_link_libraries(agino-keyboard PRIVATE fcitx-client idle-platform)
+# The programs the controller trusts on the bus (see the bridge target above, SEC-10).
+target_compile_definitions(agino-keyboard PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
 install(TARGETS agino-keyboard RUNTIME DESTINATION bin)
 install(FILES data/agino-keyboard.desktop DESTINATION share/applications)
 install(FILES data/agino-keyboard-autostart.desktop DESTINATION /etc/xdg/autostart RENAME agino-keyboard.desktop)
@@ -109,6 +111,8 @@ target_include_directories(native-panel PUBLIC src src/native)
 target_link_libraries(native-panel PUBLIC fcitx-client panel-platform Qt6::Gui Dtk6::Gui X11::X11)
 add_executable(agino-keyboard-ui src/native-main.cpp)
 target_link_libraries(agino-keyboard-ui PRIVATE native-panel candidate-rows desktop-adapter key-sound)
+# The controller the keyboard window follows (SEC-10).
+target_compile_definitions(agino-keyboard-ui PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
 # Keyboard of the login and lock screens: embedded by window id, keys sent as X11 key events (no Fcitx5).
 add_executable(agino-keyboard-embed src/embed-main.cpp)
 target_link_libraries(agino-keyboard-embed PRIVATE native-panel X11::Xtst)

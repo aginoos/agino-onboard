@@ -2,6 +2,8 @@
 #include "keyboardstate.h"
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QHash>
+#include <QSet>
 #include <QTimer>
 class FcitxClient:public QObject {
  Q_OBJECT
@@ -54,6 +56,11 @@ private:
  void retryInputMethodNames();
  void requestInputMethodNames();
  void controllerOwnerChanged(const QString &,const QString &,const QString &);
+ // SEC-10: whether the unique bus name runs Fcitx5; one verdict per name (one round trip to the bus daemon), dropped when an owner changes.
+ bool trustedPeer(const QString &);
+ // Where the calls to the bridge go: the verified connection once known, so a program that claims the name later gets nothing.
+ QString bridge()const{return bridge_.isEmpty()?QString::fromLatin1("org.agino.Keyboard1"):bridge_;}
+ QHash<QString,bool> verdicts_;QSet<QString> warned_;QString bridge_;
  bool policyPending()const{return policyRevision_!=appliedPolicyRevision_||policyRefreshPending_;}
  bool externalPolicyPending_=false;
  bool panelConfigured_=false,desiredPanelVisible_=false;

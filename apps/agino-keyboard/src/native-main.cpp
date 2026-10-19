@@ -28,11 +28,16 @@
 #include "native/nativepanel.h"
 #include "startupdpi.h"
 #include "startupconfig.h"
+#include "peercheck.h"
 #include <QScopedValueRollback>
 #if defined(Q_OS_LINUX) && defined(__GLIBC__)
 #include <malloc.h>
 #endif
 using Dtk::Gui::DGuiApplicationHelper;
+// The path of a program as /proc/<pid>/exe shows it (links resolved); the path itself when the file is not there.
+static QString programPath(const QString &path){const QString real=QFileInfo(path).canonicalFilePath();return real.isEmpty()?path:real;}
+// Where the calls to the controller go (managed mode): its verified unique name once known, so a program that claims the name later gets nothing.
+static QString controllerName=QStringLiteral("org.agino.KeyboardUi1");
 static bool enableVirtualKeyboard(){
  // Only opt in to the user's virtual-keyboard addon; never replace their profile.
  const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");
@@ -108,7 +113,7 @@ public:
  NativePanel *panel()const{return view.get();}
  void synchronizeBrokerPolicy(quint64 serial,int attempt=0){
   state.cancelAll();client.setPolicyBlocked(true);
-  auto m=QDBusMessage::createMethodCall("org.agino.KeyboardUi1","/Keyboard","org.agino.KeyboardUi1","PreferencesChanged");
+  auto m=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","PreferencesChanged");
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,2000),this);
   connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,serial,attempt]{
    QDBusPendingReply<bool> reply=*watcher;watcher->deleteLater();if(serial!=policySerial_)return;
@@ -145,7 +150,7 @@ signals:
 private:
  void retire(){
   if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")||state.visible()||warningOpen_)return;
-  auto m=QDBusMessage::createMethodCall("org.agino.KeyboardUi1","/Keyboard","org.agino.KeyboardUi1","ReleaseIdle");m.setArguments({Status()});
+  auto m=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","ReleaseIdle");m.setArguments({Status()});
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,2000),this);
   connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher]{QDBusPendingReply<bool> r=*watcher;watcher->deleteLater();if(!r.isError()&&r.value())qApp->quit();else if(!state.visible())idleTimer.start();});
  }
@@ -174,13 +179,16 @@ int main(int argc,char **argv){
   auto parentWatcher=new QDBusServiceWatcher("org.agino.KeyboardUi1",bus,QDBusServiceWatcher::WatchForOwnerChange,&app);
   const QString parentOwner=bus.interface()->serviceOwner("org.agino.KeyboardUi1").value();
   if(parentOwner.isEmpty())return 2;
+  // Only the controller may drive the window and see its state (SEC-10); the window started by hand next to the controller counts as well.
+  if(!PeerCheck::peerIs(bus,parentOwner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(QCoreApplication::applicationDirPath()+"/agino-keyboard")})){qWarning("org.agino.KeyboardUi1 is owned by %s, which is not the keyboard controller",qPrintable(parentOwner));return 2;}
+  controllerName=parentOwner;
   QObject::connect(parentWatcher,&QDBusServiceWatcher::serviceOwnerChanged,&app,[&app,parentOwner](const QString &,const QString &,const QString &owner){if(owner!=parentOwner)app.quit();});
  }
  WindowManager manager(prefs,client,state,desktop);bus.registerObject("/Keyboard",&manager,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllSignals);
  QObject::connect(&ui,&VirtualKeyboardUi::inputMethodsChanged,&client,&FcitxClient::refreshInputMethodNames);
  QObject::connect(&ui,&VirtualKeyboardUi::showRequested,&manager,&WindowManager::compositorShow);QObject::connect(&ui,&VirtualKeyboardUi::hideRequested,&manager,&WindowManager::compositorHide);
  manager.apply();if(qEnvironmentVariableIsSet("AGINO_MANAGED_UI")){
-  manager.ScheduleIdle();auto ready=QDBusMessage::createMethodCall("org.agino.KeyboardUi1","/Keyboard","org.agino.KeyboardUi1","WorkerReady");bus.asyncCall(ready,2000);
+  manager.ScheduleIdle();auto ready=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","WorkerReady");bus.asyncCall(ready,2000);
  }
  if(settings)QTimer::singleShot(0,&manager,&WindowManager::Settings);else if(!hidden)QTimer::singleShot(0,&manager,&WindowManager::Show);
  if(!screenshot.isEmpty())QTimer::singleShot(800,&app,[&]{if(manager.ensurePanel())manager.panel()->grabWindow().save(screenshot);app.quit();});

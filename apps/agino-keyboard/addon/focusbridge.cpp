@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <map>
 #include <random>
+#include <tuple>
 #include <unordered_set>
 #include "sogoupanel.h"
 using namespace fcitx;
@@ -48,6 +49,7 @@ public:
   // During fcitx5 -r the old addon owns this name until it exits.
   // Queue the new connection instead of failing addon initialization.
   bus_.requestName("org.agino.Keyboard1",dbus::RequestNameFlag::Queue);
+  warnForeignOwner();
   bus_.addObjectVTable("/org/agino/Keyboard1","org.agino.Keyboard1",*this);
   ownerWatch_=bus_.addMatch(dbus::MatchRule("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","NameOwnerChanged"),[this](dbus::Message &message){
    std::string name,oldOwner,newOwner;message>>name>>oldOwner>>newOwner;
@@ -62,7 +64,7 @@ public:
   watch(EventType::InputContextReset,EventWatcherPhase::PostInputMethod,[this](Event &e){if(focus()==static_cast<InputContextEvent &>(e).inputContext()){releaseAll();++epoch_;++candidate_;notify();}});
   watch(EventType::InputContextUpdateUI,EventWatcherPhase::PostInputMethod,[this](Event &e){if(focus()==static_cast<InputContextEvent &>(e).inputContext()){refreshCandidates();notify();}});
   watch(EventType::InputContextFlushUI,EventWatcherPhase::PreInputMethod,[this](Event &e){if(!panelSender_.empty()&&focus()==static_cast<InputContextEvent &>(e).inputContext())capturePanel(false);});
-  watch(EventType::InputContextKeyEvent,EventWatcherPhase::PreInputMethod,[this](Event &e){if(focus()==static_cast<KeyEvent &>(e).inputContext())sogou_->invalidate();if(!static_cast<KeyEvent &>(e).isVirtual())physical();});
+  watch(EventType::InputContextKeyEvent,EventWatcherPhase::PreInputMethod,[this](Event &e){if(focus()==static_cast<KeyEvent &>(e).inputContext())sogou_->invalidate();if(testHooks_&&!static_cast<KeyEvent &>(e).isVirtual())physical();});
   for(auto t:{EventType::InputContextInputMethodActivated,EventType::InputContextInputMethodDeactivated,EventType::InputMethodGroupChanged})
    watch(t,EventWatcherPhase::PostInputMethod,[this](Event &){++candidate_;notify();});
  }
@@ -96,7 +98,27 @@ public:
   if(list!=lastList_||preedit!=lastPreedit_||identities!=lastWords_||texts!=lastTexts_){++candidate_;limit_=128;}
   lastList_=list;lastPreedit_=preedit;lastWords_=identities;lastTexts_=texts;
  }
- void notify(){const auto s=getSnapshot();lastEditable_=std::get<2>(s);lastSensitive_=std::get<3>(s);changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));}
+ // The snapshot holds what the user types: it goes only to the trusted programs that asked for it (unicast), never to the whole session bus.
+ // The tests listen without being subscribers, so with AGINO_TEST_HOOKS the signal is still broadcast.
+ void notify(){
+  const auto s=getSnapshot();lastEditable_=std::get<2>(s);lastSensitive_=std::get<3>(s);
+  if(testHooks_){changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));return;}
+  for(const auto &dest:subscribers_)std::apply([&](const auto &...args){changedTo(dest,args...);},s);
+ }
+ // Exported GetSnapshot: every caller gets the same shape, but only trusted callers get the content (and are subscribed to SnapshotChanged).
+ // The trust check is here, not in getSnapshot(), because notify() calls that without a message; an untrusted caller must not trigger its side effects either.
+ Snapshot querySnapshot(){
+  if(!trusted())return Snapshot{0,0,false,false,"","",std::vector<std::string>{},false,false,"unknown",0,0};
+  subscribers_.insert(currentMessage()->sender());
+  return getSnapshot();
+ }
+ // Warn (only) when the bus name is held by another connection right after the request. This is normal for a moment during fcitx5 -r (old addon still exiting).
+ void warnForeignOwner(){
+  const auto owner=bus_.serviceOwner("org.agino.Keyboard1",500000);
+  if(owner.empty()||owner==bus_.uniqueName())return;
+  const auto pid=busCredential("GetConnectionUnixProcessID",owner);
+  FCITX_WARN()<<"agino-keyboard: bus name org.agino.Keyboard1 is owned by "<<owner<<" (pid "<<pid<<"), not by this fcitx5; queued until it exits (expected only while a previous fcitx5 is shutting down)";
+ }
  // Caller authentication: state-changing methods accept only the keyboard programs of the same user (the bus daemon vouches for uid and pid).
  bool trustedUid(const std::string &sender){return busCredential("GetConnectionUnixUser",sender)==geteuid();}
  uint64_t busCredential(const char *member,const std::string &sender){
@@ -170,7 +192,7 @@ public:
   else if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
  }
  void releaseSender(const std::string &sender){
-  trusted_.erase(sender);denied_.erase(sender);
+  trusted_.erase(sender);denied_.erase(sender);subscribers_.erase(sender);
   if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
   decltype(held_) lost;
   for(auto it=held_.begin();it!=held_.end();){if(it->second.sender==sender){lost.emplace(it->first,it->second);it=held_.erase(it);}else ++it;}
@@ -225,7 +247,7 @@ private:
  std::string panelSender_;TrackableObjectReference<InputContext> panelContext_;CustomInputPanelCallback previousPanelCallback_;
  FCITX_OBJECT_VTABLE_METHOD(setPanelVisible,"SetPanelVisible","b","");
  FCITX_OBJECT_VTABLE_METHOD(suspend,"Suspend","b","");
- FCITX_OBJECT_VTABLE_METHOD(getSnapshot,"GetSnapshot","","ttbbssasbbsii");
+ FCITX_OBJECT_VTABLE_METHOD(querySnapshot,"GetSnapshot","","ttbbssasbbsii");
  FCITX_OBJECT_VTABLE_METHOD(sendKey,"SendKey","uuubt","b");
  FCITX_OBJECT_VTABLE_METHOD(selectCandidate,"SelectCandidate","itt","b");
  FCITX_OBJECT_VTABLE_METHOD(requestPage,"RequestPage","btt","b");
@@ -237,7 +259,7 @@ private:
  std::shared_ptr<CandidateList> lastList_;std::string lastPreedit_;std::vector<const CandidateWord*> lastWords_;std::vector<std::string> lastTexts_;
  Instance *instance_;dbus::Bus bus_;TrackableObjectReference<InputContext> focusRef_;uint64_t epoch_=1,candidate_=1;bool safe_=false,suspended_=false,lastEditable_=false,lastSensitive_=false;int limit_=128;struct HeldKey {Key key;bool forwarded;bool engine;std::string sender;};std::map<uint32_t,HeldKey> held_;
  std::unique_ptr<dbus::Slot> ownerWatch_;
- std::unordered_set<std::string> trusted_;std::map<std::string,std::chrono::steady_clock::time_point> denied_;std::vector<std::string> allowed_;bool testHooks_=false;
+ std::unordered_set<std::string> trusted_,subscribers_;std::map<std::string,std::chrono::steady_clock::time_point> denied_;std::vector<std::string> allowed_;bool testHooks_=false;
  std::unique_ptr<SogouPanel> sogou_;
  std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>> handlers_;
 };
