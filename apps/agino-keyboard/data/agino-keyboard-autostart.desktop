@@ -15,8 +15,9 @@ Name[zh_CN]=Agino 屏幕键盘
 Name[zh_TW]=Agino 螢幕鍵盤
 Name[zh_HK]=Agino 螢幕鍵盤
 # A transient user service: the session does not start the program again when it crashes, the service does (a clean
-# exit, for example Quit in the tray menu, is not restarted; a second login finds the unit gone).
-Exec=systemd-run --user --collect --quiet --unit=agino-keyboard -p Restart=on-failure -p RestartSec=2 /usr/bin/agino-keyboard --hidden
+# exit, for example Quit in the tray menu, and the exit code 2 after an error dialog are not restarted). The session
+# environment is passed on (a name without a value is copied from this process).
+Exec=systemd-run --user --collect --quiet --unit=agino-keyboard -p Restart=on-failure -p RestartPreventExitStatus=2 -p RestartSec=2 --setenv=DISPLAY --setenv=XAUTHORITY --setenv=LANG --setenv=LANGUAGE --setenv=XDG_CURRENT_DESKTOP --setenv=XDG_SESSION_TYPE --setenv=QT_QPA_PLATFORM --setenv=DBUS_SESSION_BUS_ADDRESS /usr/bin/agino-keyboard --hidden
 Icon=agino-keyboard
 OnlyShowIn=Deepin;DDE;
 X-GNOME-Autostart-enabled=true

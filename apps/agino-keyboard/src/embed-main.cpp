@@ -48,7 +48,17 @@ public:
   // Nothing has the focus, or it is the keyboard itself (it never takes the focus, but never send to it).
   return focus!=None&&focus!=PointerRoot&&focus!=Window(own_);
  }
- quint8 keycodeFor(quint32 sym)override{return quint8(XKeysymToKeycode(display_,sym));}
+ quint8 findKey(quint32 sym,int *level)override{
+  // The keyboard mapping may have changed (the layouts of the user are loaded after the greeter started).
+  while(XPending(display_)){XEvent event;XNextEvent(display_,&event);if(event.type==MappingNotify)XRefreshKeyboardMapping(&event.xmapping);}
+  int first=0,last=0;XDisplayKeycodes(display_,&first,&last);const int current=group();
+  // The plainest level first; the key and the level come from the same group.
+  for(int l=0;l<4;++l)for(int code=first;code<=last;++code){
+   const quint32 candidate=quint32(XkbKeycodeToKeysym(display_,code,current,l));
+   if(candidate&&KeySender::character(candidate)==KeySender::character(sym)){*level=l;return quint8(code);}
+  }
+  return 0;
+ }
  quint32 keysymAt(quint8 code,int level)override{return quint32(XkbKeycodeToKeysym(display_,code,group(),level));}
  bool capsLockOn()override{XkbStateRec state{};return XkbGetState(display_,XkbUseCoreKbd,&state)==Success&&(state.locked_mods&LockMask);}
  void fake(quint8 code,bool press)override{if(code)XTestFakeKeyEvent(display_,code,press,CurrentTime);}
@@ -60,18 +70,21 @@ private:
 };
 
 int signalPipe[2]={-1,-1};
-void onSignal(int){const char byte=1;if(write(signalPipe[1],&byte,1)<0){}}
+void onSignal(int){const int saved=errno;const char byte=1;if(write(signalPipe[1],&byte,1)<0){}errno=saved;}
 // A protocol error of the X server must not end the program with the default Xlib handler.
 int ignoreXError(Display *,XErrorEvent *){return 0;}
 // The standard descriptors are open: otherwise the first descriptor Qt or Xlib opens would become fd 0 and the
 // notifier on the standard input would read the X protocol.
-void keepStandardDescriptors(){
- for(int fd=0;fd<=2;++fd)if(fcntl(fd,F_GETFD)<0&&errno==EBADF){const int opened=open("/dev/null",O_RDWR);if(opened>fd)close(opened);}
+// Returns true when the standard input was closed and is /dev/null now (then it says nothing about the session program).
+bool keepStandardDescriptors(){
+ bool inputReopened=false;
+ for(int fd=0;fd<=2;++fd)if(fcntl(fd,F_GETFD)<0&&errno==EBADF){const int opened=open("/dev/null",O_RDWR);if(opened>fd)close(opened);if(fd==0)inputReopened=true;}
+ return inputReopened;
 }
 }
 
 int main(int argc,char **argv){
- keepStandardDescriptors();
+ const bool inputReopened=keepStandardDescriptors();
  // The panel has no editable control: no input context.
  qputenv("QT_IM_MODULE","compose");
  qunsetenv("WAYLAND_SOCKET");
@@ -131,8 +144,8 @@ int main(int argc,char **argv){
  QSocketNotifier signalNotifier(signalPipe[0],QSocketNotifier::Read);
  QObject::connect(&signalNotifier,&QSocketNotifier::activated,&app,[&app]{char buffer[16];if(read(signalPipe[0],buffer,sizeof(buffer))>=0)app.quit();});
  // The end of the standard input (the session program closed the process) ends the program.
- QSocketNotifier input(STDIN_FILENO,QSocketNotifier::Read);
- QObject::connect(&input,&QSocketNotifier::activated,&app,[&app]{char buffer[64];if(read(STDIN_FILENO,buffer,sizeof(buffer))<=0)app.quit();});
+ QSocketNotifier input(STDIN_FILENO,QSocketNotifier::Read);input.setEnabled(!inputReopened);
+ QObject::connect(&input,&QSocketNotifier::activated,&app,[&app]{char buffer[64];const ssize_t n=read(STDIN_FILENO,buffer,sizeof(buffer));if(n==0||(n<0&&errno!=EAGAIN&&errno!=EINTR))app.quit();});
  const int result=app.exec();
  // The sender goes first when the variables are destroyed: nothing may reach it after this.
  QObject::disconnect(keyConnection);

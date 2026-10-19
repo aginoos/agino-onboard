@@ -73,7 +73,7 @@ public:
    auto list=focus()->inputPanel().candidateList();
    if(list){auto bulk=list->toBulk();int total=bulk?bulk->totalSize():list->size();
     for(int n=0;n<(total<0?limit_:std::min(total,limit_));++n){try{const auto &word=bulk?bulk->candidateFromAll(n):list->candidate(n);words.push_back(instance_->outputFilter(focus(),word.text()).toString());}catch(...){break;}}
-    if(bulk){next=total>int(words.size());if(total<0&&int(words.size())==limit_){try{bulk->candidateFromAll(limit_);next=true;}catch(...){next=false;}}}else if(auto pages=list->toPageable()){prev=pages->hasPrev();next=pages->hasNext();}
+    if(bulk){next=total>int(words.size());if(total<0&&int(words.size())==limit_){try{bulk->candidateFromAll(limit_);next=true;}catch(...){next=false;}}if(limit_>=1024)next=false;}else if(auto pages=list->toPageable()){prev=pages->hasPrev();next=pages->hasNext();}
    }
   }
   if(sogou_->ready()){const auto &s=sogou_->data();words=s.words;preedit=s.composition;prev=s.prev;next=s.next;}

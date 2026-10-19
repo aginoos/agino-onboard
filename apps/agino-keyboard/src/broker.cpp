@@ -39,7 +39,7 @@ public:
   auto bus=QDBusConnection::sessionBus();
   bus.connect(workerService,uiPath,uiInterface,"StateChanged",this,SLOT(workerState(QVariantMap,QDBusMessage)));
   connect(&worker,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int code,QProcess::ExitStatus kind){
-   const bool restart=retiring&&code==0&&kind==QProcess::NormalExit&&!pending.isEmpty();
+   const bool restart=retiring&&((code==0&&kind==QProcess::NormalExit)||retireKilled)&&!pending.isEmpty();retireKilled=false;
    if(!restart)pending.clear();
    retireTimer.stop();unanswered=0;ready=false;retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
    state.dismiss();if(code||kind==QProcess::CrashExit)cached["workerError"]=tr("The keyboard window has exited; show it again to restart it");
@@ -68,7 +68,7 @@ public:
   connect(&platform,&IdlePlatform::quitRequested,qApp,&QCoreApplication::quit);
   connect(&reload,&QTimer::timeout,&prefs,&Preferences::reload);reload.setSingleShot(true);reload.setInterval(50);
   // A keyboard window that agreed to end but does not must not leave the controller waiting for ever.
-  retireTimer.setSingleShot(true);retireTimer.setInterval(3000);connect(&retireTimer,&QTimer::timeout,this,[this]{if(retiring&&worker.state()!=QProcess::NotRunning){qWarning("The keyboard window does not end, ending it");worker.kill();}});
+  retireTimer.setSingleShot(true);retireTimer.setInterval(5000);connect(&retireTimer,&QTimer::timeout,this,[this]{if(retiring&&worker.state()!=QProcess::NotRunning){qWarning("The keyboard window does not end, ending it");retireKilled=true;worker.kill();}});
   const QString folder=QFileInfo(QSettings().fileName()).absolutePath();QDir().mkpath(folder);files.addPath(folder);
   connect(&files,&QFileSystemWatcher::directoryChanged,this,[this]{reload.start();});
   apply();
@@ -136,7 +136,7 @@ private:
  }
  void startWorker(){
   if(worker.state()!=QProcess::NotRunning||pending.isEmpty())return;
-  ready=false;retiring=false;cached["workerError"]=QString();
+  ++workerGeneration;ready=false;retiring=false;cached["workerError"]=QString();
   QString executable=QCoreApplication::applicationDirPath()+"/agino-keyboard-ui";
   if(!QFileInfo::exists(executable))executable=QCoreApplication::applicationDirPath()+"/../libexec/agino-keyboard-ui";
   auto env=QProcessEnvironment::systemEnvironment();env.insert("AGINO_MANAGED_UI","1");
@@ -148,18 +148,20 @@ private:
  }
  void dispatchPending(){if(pending.isEmpty())return;auto action=pending;pending.clear();relay(action);}
  void relay(const QString &method,const QVariantList &arguments={}){
-  auto m=QDBusMessage::createMethodCall(workerService,uiPath,uiInterface,method);m.setArguments(arguments);++activeRequests;
+  auto m=QDBusMessage::createMethodCall(workerService,uiPath,uiInterface,method);m.setArguments(arguments);++activeRequests;const auto generation=workerGeneration;
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,10000),this);
-  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher]{
+  connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher,generation]{
    QDBusPendingReply<> reply=*watcher;watcher->deleteLater();--activeRequests;
+   // The calls of a window that has ended come back as "disconnected": they say nothing about the window of now.
+   if(generation!=workerGeneration)return;
    // A worker that does not answer twice in a row hangs: end it, the next request starts a new one.
    const auto type=reply.isError()?reply.error().type():QDBusError::NoError;
-   if(type==QDBusError::NoReply||type==QDBusError::Timeout||type==QDBusError::TimedOut){if(++unanswered>=2&&worker.state()!=QProcess::NotRunning){unanswered=0;qWarning("The keyboard window does not answer, ending it");worker.kill();}}
+   if((type==QDBusError::NoReply||type==QDBusError::Timeout||type==QDBusError::TimedOut)&&!reply.error().message().contains("disconnected")){if(++unanswered>=2&&worker.state()!=QProcess::NotRunning){unanswered=0;qWarning("The keyboard window does not answer, ending it");worker.kill();}}
    else unanswered=0;
   });
  }
  Preferences &prefs;FcitxClient &client;IdlePlatform &platform;KeyboardState state;QProcess worker;QFileSystemWatcher files;QTimer reload,retireTimer;
- QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,unanswered=0,sourceKind=0;double sourceX=0,sourceY=0;
+ QVariantMap cached,resume;QString pending,preferred,capture;bool ready=false,retiring=false,locked=false,initialized=false,preferredPending=false,connectedBefore=false;int activeRequests=0,unanswered=0,sourceKind=0;quint64 workerGeneration=0;bool retireKilled=false;double sourceX=0,sourceY=0;
 };
 static void errorDialog(const QString &message){
  QString path=QCoreApplication::applicationDirPath()+"/agino-keyboard-ui";if(!QFileInfo::exists(path))path=QCoreApplication::applicationDirPath()+"/../libexec/agino-keyboard-ui";

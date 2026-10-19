@@ -68,7 +68,7 @@ NativeStyle NativePanel::style()const{NativeStyle s;s.palette=DGuiApplicationHel
 QRectF NativePanel::keyArea(QSizeF sz)const{const bool c=prefs_.compact();qreal margin=c?8:12,top=c?36:56,pad=c?4:12;return {margin,top,sz.width()-2*margin,sz.height()-top-pad};}
 QRectF NativePanel::candidateViewport(QSizeF sz)const{const bool c=prefs_.compact();qreal x=c?4:8,h=c?32:48,slot=c?24:32;return {x+slot+8,0,sz.width()-2*x-h-slot-16,h};}
 void NativePanel::addControl(NativeControl c){if(!c.rect.isEmpty())controls_.push_back(std::move(c));}
-void NativePanel::updateIcon(){int size=qRound((prefs_.compact()?18:24)*devicePixelRatio());if(size==iconPixels_&&!icon_.isNull())return;iconPixels_=size;QImageReader reader(size>=1&&size<=80?QString(":/data/icons/keyboard-%1.png").arg(size):QString(":/data/agino-keyboard.svg"),size>=1&&size<=80?"PNG":"SVG");reader.setAutoDetectImageFormat(false);if(size>80)reader.setScaledSize(QSize(size,size));icon_=reader.read();}
+void NativePanel::updateIcon(){int size=qRound((prefs_.compact()?18:24)*devicePixelRatio());if(size==iconPixels_&&!icon_.isNull())return;iconPixels_=size;QImageReader reader(size>=1&&size<=128?QString(":/data/icons/keyboard-%1.png").arg(size):QString(":/data/agino-keyboard.svg"),size>=1&&size<=128?"PNG":"SVG");reader.setAutoDetectImageFormat(false);if(size>128)reader.setScaledSize(QSize(size,size));icon_=reader.read();}
 void NativePanel::render(QPainter &p,QSizeF sz){
  controls_.clear();const auto st=style();const auto pal=st.palette;const bool compact=st.compact;const qreal w=sz.width(),h=sz.height(),ch=compact?32:48,bx=compact?4:8,bw=w-2*bx;
  const qreal opacity=transparency_?prefs_.opacityPercent()/100.:1.;p.setOpacity(opacity);p.setRenderHint(QPainter::Antialiasing,true);
