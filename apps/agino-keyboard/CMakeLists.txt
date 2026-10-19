@@ -204,6 +204,13 @@ add_executable(agino-keyboard-ui src/native-main.cpp src/preferences.h native.qr
  src/native/nativesettings.cpp src/native/nativesettings.h src/native/nativeaccessible.cpp)
 target_include_directories(agino-keyboard-ui PRIVATE src src/native)
 target_link_libraries(agino-keyboard-ui PRIVATE fcitx-client candidate-rows desktop-adapter key-sound panel-platform Qt6::Gui Dtk6::Gui)
+# Keyboard of the login and lock screens: embedded by window id, keys sent as X11 key events (no Fcitx5).
+add_executable(agino-keyboard-embed src/embed-main.cpp src/preferences.h native.qrc
+ src/native/nativepanel.cpp src/native/nativepanel.h src/native/nativeoutput.cpp src/native/nativecandidaterows.cpp src/native/nativecandidaterows.h src/native/nativepainting.cpp
+ src/native/nativesettings.cpp src/native/nativesettings.h src/native/nativeaccessible.cpp)
+target_include_directories(agino-keyboard-embed PRIVATE src src/native)
+target_link_libraries(agino-keyboard-embed PRIVATE fcitx-client candidate-rows desktop-adapter key-sound panel-platform Qt6::Gui Dtk6::Gui X11::X11 X11::Xtst)
+install(TARGETS agino-keyboard-embed RUNTIME DESTINATION bin)
 add_executable(test-native-accessible src/native/nativeaccessible.cpp src/native/nativeaccessible_test.cpp)
 target_link_libraries(test-native-accessible PRIVATE Qt6::Gui)
 
