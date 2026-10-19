@@ -12,9 +12,14 @@
 #include <fcitx-utils/dbus/bus.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/matchrule.h>
+#include <fcitx-utils/log.h>
+#include <unistd.h>
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <random>
+#include <unordered_set>
 #include "sogoupanel.h"
 using namespace fcitx;
 using Snapshot=std::tuple<uint64_t,uint64_t,bool,bool,std::string,std::string,std::vector<std::string>,bool,bool,std::string,int32_t,int32_t>;
@@ -35,6 +40,8 @@ private:
 class FocusBridge:public AddonInstance,public dbus::ObjectVTable<FocusBridge> {
 public:
  explicit FocusBridge(Instance *instance):instance_(instance),bus_(dbus::BusType::Session){
+  testHooks_=std::getenv("AGINO_TEST_HOOKS")!=nullptr;
+  std::error_code ec;for(const char *path:{AGINO_TRUSTED_CONTROLLER,AGINO_TRUSTED_UI})allowed_.push_back(std::filesystem::weakly_canonical(path,ec).string());
   sogou_=std::make_unique<SogouPanel>(bus_,instance_->eventLoop(),[this]{sogouChanged();});
   epoch_=(uint64_t(std::random_device{}()&0xfffff)<<32);bus_.attachEventLoop(&instance_->eventLoop());
   // During fcitx5 -r the old addon owns this name until it exits.
@@ -89,8 +96,33 @@ public:
   lastList_=list;lastPreedit_=preedit;lastWords_=identities;lastTexts_=texts;
  }
  void notify(){const auto s=getSnapshot();lastEditable_=std::get<2>(s);lastSensitive_=std::get<3>(s);changed(std::get<0>(s),std::get<1>(s),std::get<2>(s),std::get<3>(s),std::get<4>(s),std::get<5>(s),std::get<6>(s),std::get<7>(s),std::get<8>(s),std::get<9>(s),std::get<10>(s),std::get<11>(s));}
+ // Caller authentication: state-changing methods accept only the keyboard programs of the same user (the bus daemon vouches for uid and pid).
+ bool trustedUid(const std::string &sender){return busCredential("GetConnectionUnixUser",sender)==getuid();}
+ uint64_t busCredential(const char *member,const std::string &sender){
+  auto msg=bus_.createMethodCall("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus",member);msg<<sender;
+  auto reply=msg.call(500000);uint32_t value=0;
+  return reply&&!reply.isError()&&(reply>>value)?uint64_t(value):~uint64_t(0);
+ }
+ bool trustedExe(uint64_t pid){
+  std::error_code ec;auto path=std::filesystem::read_symlink("/proc/"+std::to_string(pid)+"/exe",ec).string();
+  // After a package upgrade the running program's file is replaced, and the kernel appends this suffix.
+  static const std::string gone=" (deleted)";
+  if(ec||path.empty())return false;
+  if(path.size()>gone.size()&&path.compare(path.size()-gone.size(),gone.size(),gone)==0)path.resize(path.size()-gone.size());
+  path=std::filesystem::weakly_canonical(path,ec).string();
+  return !ec&&std::find(allowed_.begin(),allowed_.end(),path)!=allowed_.end();
+ }
+ bool trusted(){
+  const auto sender=currentMessage()?currentMessage()->sender():std::string();
+  if(sender.empty())return false;
+  if(trusted_.count(sender))return true;
+  const auto pid=busCredential("GetConnectionUnixProcessID",sender);
+  if(trustedUid(sender)&&(testHooks_||(pid!=~uint64_t(0)&&trustedExe(pid)))){trusted_.insert(sender);return true;}
+  if(denied_.insert(sender).second)FCITX_WARN()<<"agino-keyboard: rejected a call from untrusted bus name "<<sender<<" (pid "<<pid<<")";
+  return false;
+ }
  bool sendKey(uint32_t sym,uint32_t code,uint32_t mods,bool release,uint64_t epoch){
-  if(epoch!=epoch_||!editable())return false;
+  if(!trusted()||epoch!=epoch_||!editable())return false;
   // A key of the keyboard: a symbol (X11 or Unicode up to U+10FFFF without the surrogates), a keycode of the X11 range, the modifier bits of X11.
   if(sym==0||sym>0x0110ffff||(sym>=0x0100d800&&sym<=0x0100dfff)||code>255)return false;
   mods&=0x1fff;
@@ -108,13 +140,13 @@ public:
   return true;
  }
  bool selectCandidate(int32_t index,uint64_t epoch,uint64_t candidate){
-  if(epoch!=epoch_||candidate!=candidate_||!editable()||sensitive()||index<0||index>=limit_)return false;
+  if(!trusted()||epoch!=epoch_||candidate!=candidate_||!editable()||sensitive()||index<0||index>=limit_)return false;
   if(sogou_->ready()){const auto context=focus()->watch();return sogou_->select(index,[this,context,epoch]{if(epoch!=epoch_||!editable()||sensitive()||context.get()!=focus())return;Key key(FcitxKey_space,KeyState::Virtual);KeyEvent press(focus(),key,false);focus()->keyEvent(press);if(context.get()){KeyEvent release(context.get(),key,true);context.get()->keyEvent(release);}});}
   auto list=focus()->inputPanel().candidateList();if(!list)return false;
   try{const auto &word=list->toBulk()?list->toBulk()->candidateFromAll(index):list->candidate(index);if(word.isPlaceHolder())return false;word.select(focus());return true;}catch(...){return false;}
  }
  bool requestPage(bool next,uint64_t epoch,uint64_t candidate){
-  if(epoch!=epoch_||candidate!=candidate_||!editable()||sensitive())return false;
+  if(!trusted()||epoch!=epoch_||candidate!=candidate_||!editable()||sensitive())return false;
   if(sogou_->ready()){if(!sogou_->selectable())return false;if(next?!sogou_->data().next:!sogou_->data().prev)return false;Key key(next?FcitxKey_Next:FcitxKey_Prior,KeyState::Virtual);auto context=focus()->watch();KeyEvent press(focus(),key,false);focus()->keyEvent(press);if(context.get()){KeyEvent release(context.get(),key,true);context.get()->keyEvent(release);}return true;}
   auto list=focus()->inputPanel().candidateList();if(!list)return false;
   if(list->toBulk()){if(!next||limit_>=1024)return false;limit_+=128;notify();return true;}
@@ -122,16 +154,17 @@ public:
   next?pages->next():pages->prev();focus()->updateUserInterface(UserInterfaceComponent::InputPanel);return true;
  }
  std::vector<std::string> inputMethods(){std::vector<std::string> methods;for(const auto &im:instance_->inputMethodManager().currentGroup().inputMethodList())methods.push_back(im.name());return methods;}
- bool setInputMethod(const std::string &name,uint64_t epoch){if(!editable()||epoch!=epoch_||sensitive())return false;auto methods=inputMethods();if(std::find(methods.begin(),methods.end(),name)==methods.end())return false;releaseAll();instance_->setCurrentInputMethod(name);notify();return true;}
- void setSafeInput(bool value){if(safe_==value)return;releaseAll();safe_=value;restorePanel(false);if(focus())focus()->reset();++epoch_;++candidate_;notify();}
- void suspend(bool v){if(suspended_==v)return;releaseAll();if(focus())focus()->reset();restorePanel(false);suspended_=v;focusRef_.unwatch();if(!v){auto *current=instance_->lastFocusedInputContext();if(current&&current->hasFocus())focusRef_=current->watch();}if(!panelSender_.empty())capturePanel(true);lastList_.reset();lastPreedit_.clear();lastWords_.clear();lastTexts_.clear();++epoch_;++candidate_;notify();}
+ bool setInputMethod(const std::string &name,uint64_t epoch){if(!trusted()||!editable()||epoch!=epoch_||sensitive())return false;auto methods=inputMethods();if(std::find(methods.begin(),methods.end(),name)==methods.end())return false;releaseAll();instance_->setCurrentInputMethod(name);notify();return true;}
+ void setSafeInput(bool value){if(!trusted()||safe_==value)return;releaseAll();safe_=value;restorePanel(false);if(focus())focus()->reset();++epoch_;++candidate_;notify();}
+ void suspend(bool v){if(!trusted()||suspended_==v)return;releaseAll();if(focus())focus()->reset();restorePanel(false);suspended_=v;focusRef_.unwatch();if(!v){auto *current=instance_->lastFocusedInputContext();if(current&&current->hasFocus())focusRef_=current->watch();}if(!panelSender_.empty())capturePanel(true);lastList_.reset();lastPreedit_.clear();lastWords_.clear();lastTexts_.clear();++epoch_;++candidate_;notify();}
  void setPanelVisible(bool visible){
   const auto sender=currentMessage()?currentMessage()->sender():std::string();
-  if(sender.empty())return;
+  if(sender.empty()||!trusted())return;
   if(visible){if(!panelSender_.empty()&&panelSender_!=sender)return;panelSender_=sender;capturePanel(true);}
   else if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
  }
  void releaseSender(const std::string &sender){
+  trusted_.erase(sender);denied_.erase(sender);
   if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
   decltype(held_) lost;
   for(auto it=held_.begin();it!=held_.end();){if(it->second.sender==sender){lost.emplace(it->first,it->second);it=held_.erase(it);}else ++it;}
@@ -198,6 +231,7 @@ private:
  std::shared_ptr<CandidateList> lastList_;std::string lastPreedit_;std::vector<const CandidateWord*> lastWords_;std::vector<std::string> lastTexts_;
  Instance *instance_;dbus::Bus bus_;TrackableObjectReference<InputContext> focusRef_;uint64_t epoch_=1,candidate_=1;bool safe_=false,suspended_=false,lastEditable_=false,lastSensitive_=false;int limit_=128;struct HeldKey {Key key;bool forwarded;bool engine;std::string sender;};std::map<uint32_t,HeldKey> held_;
  std::unique_ptr<dbus::Slot> ownerWatch_;
+ std::unordered_set<std::string> trusted_,denied_;std::vector<std::string> allowed_;bool testHooks_=false;
  std::unique_ptr<SogouPanel> sogou_;
  std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>> handlers_;
 };

@@ -9,7 +9,7 @@
 class KeyBackend {
 public:
  virtual ~KeyBackend()=default;
- virtual bool focusAccepts()=0;                  // a window other than the keyboard itself has the input focus
+ virtual bool focusAccepts()=0;                  // the input focus is in the window of the session program (never the keyboard itself)
  // The key that produces the symbol in the current group of the keyboard (layout) and the level (0..3: plain, Shift,
  // AltGr, Shift+AltGr) it is on; 0 when no key does. Symbols are compared as characters (see KeySender::character).
  virtual quint8 findKey(quint32 sym,int *level)=0;

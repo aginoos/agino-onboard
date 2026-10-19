@@ -12,6 +12,10 @@ add_test(NAME fcitx-metadata-recovery COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/
 add_executable(test-keysender tests/test_keysender.cpp)
 target_link_libraries(test-keysender PRIVATE keyboard-state Qt6::Test)
 add_test(NAME keyboard-keysender COMMAND test-keysender)
+add_executable(test-focusguard tests/test_focusguard.cpp)
+target_include_directories(test-focusguard PRIVATE src)
+target_link_libraries(test-focusguard PRIVATE Qt6::Test)
+add_test(NAME keyboard-focusguard COMMAND test-focusguard)
 add_executable(test-native-accessible src/native/nativeaccessible.cpp src/native/nativeaccessible_test.cpp)
 target_link_libraries(test-native-accessible PRIVATE Qt6::Gui)
 

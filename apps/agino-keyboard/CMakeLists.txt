@@ -25,6 +25,8 @@ target_include_directories(fcitx-client PUBLIC src)
 target_link_libraries(fcitx-client PUBLIC keyboard-state Qt6::DBus)
 add_library(agino-keyboard-bridge MODULE addon/focusbridge.cpp)
 target_link_libraries(agino-keyboard-bridge PRIVATE Fcitx5::Core)
+# The only programs allowed to drive the bridge over D-Bus (see trusted() in addon/focusbridge.cpp).
+target_compile_definitions(agino-keyboard-bridge PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
 configure_file(addon/agino-keyboard.conf.in agino-keyboard.conf @ONLY)
 install(TARGETS agino-keyboard-bridge LIBRARY DESTINATION lib/x86_64-linux-gnu/fcitx5)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/agino-keyboard.conf DESTINATION share/fcitx5/addon)

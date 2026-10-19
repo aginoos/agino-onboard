@@ -5,8 +5,9 @@
 // and reparents the window into its own window, as it did with `onboard -e`. Differences to the keyboard
 // of the desktop session (agino-keyboard, agino-keyboard-ui):
 //  - no Fcitx5: the greeter has none, the lock screen has the input method of the user session, but the
-//    password field is the only target. The keys are sent as X11 key events (XTest) to the window that has
-//    the input focus, like a physical keyboard;
+//    password field is the only target. The keys are sent as X11 key events (XTest), like a physical keyboard,
+//    but only while the window of the session program (its own window tree or a window of its process) has
+//    the input focus; with any other window focused (a popup, another program) they are dropped;
 //  - no session services: no D-Bus name, no session bus, no tray icon, no shortcut, so it never collides with
 //    the keyboard of the user session;
 //  - the compact layout, always shown, never dismissed, no settings page, no files written.
@@ -22,6 +23,7 @@
 #include <unistd.h>
 #include "keyboardstate.h"
 #include "fcitxclient.h"
+#include "focusguard.h"
 #include "i18n.h"
 #include "keysender.h"
 #include "preferences.h"
@@ -30,6 +32,7 @@
 // Xlib defines macros (None, Bool, ...) that break the Qt headers: last.
 #include <X11/XKBlib.h>
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 
@@ -37,16 +40,22 @@ namespace {
 // KeyBackend on the X server of the session (its own connection, the Qt one is XCB).
 class XlibBackend final:public KeyBackend {
 public:
- explicit XlibBackend(WId own):own_(own),display_(XOpenDisplay(nullptr)){
+ // session: the pid of the session program that started us (its windows are the only ones that get keys).
+ XlibBackend(WId own,pid_t session):own_(own),session_(session),display_(XOpenDisplay(nullptr)){
   int event=0,error=0,major=0,minor=0;
   if(display_&&!XTestQueryExtension(display_,&event,&error,&major,&minor)){XCloseDisplay(display_);display_=nullptr;}
  }
  ~XlibBackend()override{if(display_)XCloseDisplay(display_);}
  bool ready()const{return display_;}
  bool focusAccepts()override{
-  Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
-  // Nothing has the focus, or it is the keyboard itself (it never takes the focus, but never send to it).
-  return focus!=None&&focus!=PointerRoot&&focus!=Window(own_);
+  const bool accepted=focusInSession();
+  // One line when the verdict is first known and when it changes (no line per key, never the key).
+  if(int(accepted)!=verdict_){
+   verdict_=int(accepted);
+   std::fprintf(stderr,accepted?"agino-keyboard-embed: the input focus is in the window of the session program, keys are sent\n"
+                              :"agino-keyboard-embed: the input focus is not in the window of the session program, keys are dropped\n");
+  }
+  return accepted;
  }
  quint8 findKey(quint32 sym,int *level)override{
   // The keyboard mapping may have changed (the layouts of the user are loaded after the greeter started).
@@ -66,7 +75,50 @@ public:
 private:
  // The group of the keyboard (layout) the server uses for the next key event.
  int group()const{XkbStateRec state{};return XkbGetState(display_,XkbUseCoreKbd,&state)==Success?state.group:0;}
- WId own_;Display *display_;
+ // The window and its ancestors up to the top-level (the direct child of the root); empty on any error or a loop.
+ QList<quint32> chainUp(Window window)const{
+  QList<quint32> chain;
+  for(int depth=0;depth<64;++depth){
+   Window root=None,parent=None,*children=nullptr;unsigned int count=0;
+   if(!XQueryTree(display_,window,&root,&parent,&children,&count))return {};
+   if(children)XFree(children);
+   chain.append(quint32(window));
+   if(parent==None||parent==root)return chain;   // the top-level (or the root itself)
+   window=parent;
+  }
+  return {};
+ }
+ // _NET_WM_PID (Qt sets it on its windows) of each window of the chain; 0 where there is none or the query failed.
+ QList<quint32> pidsOf(const QList<quint32> &chain)const{
+  QList<quint32> pids;
+  // Qt creates the atom with its first window, after we started: look it up each time (Xlib caches the found atom).
+  const Atom atom=XInternAtom(display_,"_NET_WM_PID",True);
+  for(const quint32 window:chain){
+   quint32 pid=0;
+   if(atom!=None){
+    Atom type=None;int format=0;unsigned long count=0,after=0;unsigned char *data=nullptr;
+    if(XGetWindowProperty(display_,Window(window),atom,0,1,False,XA_CARDINAL,&type,&format,&count,&after,&data)==Success&&data){
+     if(type==XA_CARDINAL&&format==32&&count==1)pid=quint32(*reinterpret_cast<unsigned long*>(data));   // format 32 is an array of long
+     XFree(data);
+    }
+   }
+   pids.append(pid);
+  }
+  return pids;
+ }
+ // Keys only go to the window of the session program: the lock screen or greeter that embedded the keyboard. That is the
+ // window tree of the top-level of the keyboard (it was reparented into it), or a window of the process of that program
+ // (the focused window may be a child, a focus proxy or a popup of it). Not the keyboard itself, no other program.
+ // Not embedded yet the top-level of the keyboard is itself: nothing outside it matches by the tree, only by the pid
+ // (the keyboard is off screen then, so nobody can press a key; the same rule needs no special case).
+ bool focusInSession()const{
+  Window focus=None;int revert=0;XGetInputFocus(display_,&focus,&revert);
+  if(focus==None||focus==PointerRoot)return false;
+  const QList<quint32> own=chainUp(Window(own_)),at=chainUp(focus);
+  if(own.isEmpty()||at.isEmpty()||FocusGuard::isOwn(own,at))return false;
+  return FocusGuard::sameToplevel(own,at)||FocusGuard::pidMatches(pidsOf(at),session_);
+ }
+ WId own_;pid_t session_;Display *display_;int verdict_=-1;   // verdict_: -1 none yet, else the last answer
 };
 
 int signalPipe[2]={-1,-1};
@@ -123,7 +175,7 @@ int main(int argc,char **argv){
  panel.setMinimumSize(QSize(width,height));panel.resize(width,height);
  panel.setPosition(-30000,-30000);   // mapped off screen until the session program reparents it
 
- XlibBackend backend(panel.winId());
+ XlibBackend backend(panel.winId(),parent);
  if(!backend.ready()){std::fprintf(stderr,"agino-keyboard-embed: cannot open the X11 display or it has no XTEST extension\n");return 2;}
  KeySender keys(backend);
  const auto keyConnection=QObject::connect(&state,&KeyboardState::keyRequested,&app,[&keys](KeySpec k,bool release){keys.send(k,release);});
