@@ -5,15 +5,13 @@
 #include <sys/prctl.h>
 #include <unistd.h>
 #include <signal.h>
-#include <QFont>
+#include <cstdio>
 #include <memory>
-#include <QDir>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QDBusInterface>
 #include <QDBusConnectionInterface>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusServiceWatcher>
@@ -22,31 +20,19 @@
 #include "keyboardstate.h"
 #include "keysound.h"
 #include "fcitxclient.h"
-#include "virtualkeyboardui.h"
 #include "desktopadapter.h"
 #include "preferences.h"
 #include "native/nativepanel.h"
 #include "startupdpi.h"
-#include "startupconfig.h"
+#include "panelstatus.h"
+#include "log.h"
 #include "peercheck.h"
 #include <QScopedValueRollback>
-#if defined(Q_OS_LINUX) && defined(__GLIBC__)
-#include <malloc.h>
-#endif
 using Dtk::Gui::DGuiApplicationHelper;
 // The path of a program as /proc/<pid>/exe shows it (links resolved); the path itself when the file is not there.
 static QString programPath(const QString &path){const QString real=QFileInfo(path).canonicalFilePath();return real.isEmpty()?path:real;}
-// Where the calls to the controller go (managed mode): its verified unique name once known, so a program that claims the name later gets nothing.
+// Where the calls to the controller go: its verified unique name once known, so a program that claims the name later gets nothing.
 static QString controllerName=QStringLiteral("org.agino.KeyboardUi1");
-static bool enableVirtualKeyboard(){
- // Only opt in to the user's virtual-keyboard addon; never replace their profile.
- const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");
- bool changed=false;
- if(!enableVirtualKeyboardConfig(path,&changed))return false;
- if(changed){auto msg=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");
- msg.setAutoStartService(false);QDBusConnection::sessionBus().asyncCall(msg,1000);}
- return true;
-}
 static void panelMessage(bool information,const QString &message){
  QProcess dialog;QEventLoop loop;
  const pid_t parent=getpid();dialog.setChildProcessModifier([parent]{if(prctl(PR_SET_PDEATHSIG,SIGTERM)<0||getppid()!=parent)_exit(2);});
@@ -59,45 +45,31 @@ class WindowManager:public QObject {
  Q_OBJECT
  Q_CLASSINFO("D-Bus Interface","org.agino.KeyboardUi1")
 public:
- WindowManager(Preferences &p,FcitxClient &f,KeyboardState &s,DesktopAdapter &a):prefs(p),client(f),state(s),desktop(a){
+ // resume: what the controller handed over (--resume-json) from the window that ended before.
+ WindowManager(Preferences &p,FcitxClient &f,KeyboardState &s,DesktopAdapter &a,const PanelStatus &resume):prefs(p),client(f),state(s),desktop(a){
   connect(&client,&FcitxClient::changed,this,&WindowManager::syncContext);
-  // Track device sources without dismissing the panel on physical keys.
-  // Fcitx notifications include shortcut releases and do not control visibility.
-  if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI"))connect(&desktop,&DesktopAdapter::inputSourceChanged,&state,&KeyboardState::setSource);
   connect(&desktop,&DesktopAdapter::capabilitiesChanged,this,&WindowManager::apply);
-  connect(&desktop,&DesktopAdapter::lockedChanged,this,[this](bool locked){if(locked_==locked){if(!managed_)client.suspend(locked);return;}locked_=locked;state.cancelAll();state.setSource(KeyboardState::Mouse);state.dismiss();if(!managed_)client.suspend(locked);syncContext();});
+  connect(&desktop,&DesktopAdapter::lockedChanged,this,[this](bool locked){if(locked_==locked)return;locked_=locked;state.cancelAll();state.setSource(KeyboardState::Mouse);state.dismiss();syncContext();});
   connect(&desktop,&DesktopAdapter::outputChanged,this,[this]{state.cancelAll();QTimer::singleShot(0,this,&WindowManager::resizePanel);});
   connect(&state,&KeyboardState::keyRequested,this,[this](KeySpec k,bool release){if(client.sendKey(k,release,client.contextEpoch())&&!release)sound.play();});
   connect(&state,&KeyboardState::visibleChanged,this,[this](bool visible){if(visible){idleTimer.stop();if(!showRequested_)showStart.start();showRequested_=false;if(!ensurePanel()||!validSize()||!state.visible())return;view->measureNextFrame(showStart,++showSerial_);}client.setPanelVisible(visible);desktop.setPanelVisible(visible);if(!visible&&view&&view->rootObject()){view->rootObject()->setProperty("expanded",false);idleTimer.start();}});
   QObject::connect(&prefs,&Preferences::changed,this,&WindowManager::apply);
-  if(managed_)connect(&prefs,&Preferences::changed,this,[this]{synchronizeBrokerPolicy(++policySerial_);});
+  connect(&prefs,&Preferences::changed,this,[this]{synchronizeBrokerPolicy(++policySerial_);});
   connect(&state,&KeyboardState::settingsOpenChanged,this,&WindowManager::syncContext);
 
   state.useWallClock();timer.setInterval(16);connect(&timer,&QTimer::timeout,this,[this]{state.tick();});
   idleTimer.setSingleShot(true);idleTimer.setInterval(3000);
   connect(&idleTimer,&QTimer::timeout,this,[this]{unloadPanel();retire();});
-  const auto saved=QJsonDocument::fromJson(qgetenv("AGINO_UI_RESUME")).object().toVariantMap();
-  if(saved.value("resuming").toBool()&&!saved.value("applyPreferred").toBool()){preferredInitialized_=true;preferredIm_=prefs.preferredIm();}
-  state.setCapsLock(saved.value("capsLock").toBool());desktop.restorePlacement(saved);
-  showSerial_=saved.value("showSerial").toULongLong();lastFrameSerial_=saved.value("firstFrameSerial").toULongLong();lastFrameMs_=saved.value("firstFrameMs",-1.).toDouble();
+  state.setCapsLock(resume.capsLock);desktop.restorePlacement(resume.toVariantMap(true));
+  showSerial_=resume.showSerial;lastFrameSerial_=resume.firstFrameSerial;lastFrameMs_=resume.firstFrameMs;
   auto publish=[this]{QTimer::singleShot(0,this,[this]{emit StateChanged(Status());});};
   connect(&state,&KeyboardState::visibleChanged,this,publish);connect(&state,&KeyboardState::settingsOpenChanged,this,publish);
   connect(&state,&KeyboardState::clockNeededChanged,this,[this](bool needed){if(needed)timer.start();else timer.stop();});
  }
+ // The window of the controller ends right after this, which returns everything to the system.
  void unloadPanel(){
    if(state.visible()||!view||view->isVisible())return;
    state.cancelAll();lastFrameMs_=view->firstFrameMilliseconds();lastFrameSerial_=view->firstFrameSerial();desktop.detach();view.reset();
-   // Only without the controller (started by hand): a worker of the controller ends right after this, which
-   // returns everything, so the font cache hook (an internal Qt hook, reassess it when upgrading Qt) is not used.
-   if(managed_)return;
-   // Qt 6.8.0: reset this GUI thread's font cache after every panel/font user
-   // is gone. Surviving fonts reload by cache id on reuse.
-   QFont::cleanup();
-#if defined(Q_OS_LINUX) && defined(__GLIBC__)
-   // Return free allocator pages after the native panel has been destroyed.
-   // Run once per idle unload, never while typing or on short hide/show bursts.
-   malloc_trim(0);
-#endif
  }
  bool ensurePanel(){
   idleTimer.stop();
@@ -128,16 +100,26 @@ public:
  // Snapshot callbacks often leave geometry metadata unchanged. Avoid dirtying
  // QSettings and its directory watcher for every key/focus update.
  void resizePanel(){if(resizing_)return;QScopedValueRollback<bool> guard(resizing_,true);auto screens=qGuiApp->screens();auto screen=selectedScreen();if(!screen)return;if(!view||!view->rootObject())return;view->rootObject()->setProperty("screenNames",availableScreenNames());int minimum=view->rootObject()->property("minimumHeight").toInt();auto g=screen->geometry();const QSize requested(prefs.compact()?524:qMax(828,qMin(934,g.width()-24)),minimum);const bool wasVisible=state.visible();state.setLayoutFits(g.width()>=requested.width()&&g.height()>=requested.height());if(!state.layoutFits()){if(wasVisible)sizeWarning();return;}desktop.configurePanel(screen,requested);}
- void syncContext(){state.setContext(client.contextEpoch(),client.editable()&&!state.settingsOpen()&&!locked_,client.sensitive());if(!client.connected()){state.cancelAll();if(wasConnected_)state.dismiss();}wasConnected_=client.connected();if(!managed_&&preferredPending_&&!state.settingsOpen()&&!locked_&&client.editable()&&!client.sensitive()&&client.inputMethods().contains(preferredIm_)){preferredPending_=false;if(client.inputMethod()!=preferredIm_)client.setInputMethod(preferredIm_);}QTimer::singleShot(0,this,&WindowManager::resizePanel);}
- void apply(){sound.setEnabled(prefs.keySound());if(!preferredInitialized_||preferredIm_!=prefs.preferredIm()){preferredInitialized_=true;preferredIm_=prefs.preferredIm();preferredPending_=!preferredIm_.isEmpty();}state.cancelAll();auto mode=KeyboardState::Mode(prefs.mode());if(mode==KeyboardState::Automatic&&!desktop.capabilities().automaticReady())mode=KeyboardState::Manual;state.setMode(mode);DGuiApplicationHelper::instance()->setPaletteType(DGuiApplicationHelper::ColorType(prefs.theme()));if(view&&view->rootObject())view->rootObject()->setProperty("functionRow",prefs.functionRow());if(!managed_)client.setSafeInput(prefs.safeInput());resizePanel();syncContext();}
- void compositorShow(){syncContext();}
- void compositorHide(){state.cancelAll();client.refreshSnapshot();syncContext();}
+ void syncContext(){state.setContext(client.contextEpoch(),client.editable()&&!state.settingsOpen()&&!locked_,client.sensitive());if(!client.connected()){state.cancelAll();if(wasConnected_)state.dismiss();}wasConnected_=client.connected();QTimer::singleShot(0,this,&WindowManager::resizePanel);}
+ void apply(){sound.setEnabled(prefs.keySound());state.cancelAll();auto mode=KeyboardState::Mode(prefs.mode());if(mode==KeyboardState::Automatic&&!desktop.capabilities().automaticReady())mode=KeyboardState::Manual;state.setMode(mode);DGuiApplicationHelper::instance()->setPaletteType(DGuiApplicationHelper::ColorType(prefs.theme()));if(view&&view->rootObject())view->rootObject()->setProperty("functionRow",prefs.functionRow());resizePanel();syncContext();}
 public slots:
- QVariantMap Status()const{auto value=desktop.placement();const QVariantMap status{{"capsLock",bool(state.modifiers()&2)},{"modifiers",state.modifiers()},{"shortcutError",shortcutError_},{"inputMethodName",client.inputMethodNames().value(client.inputMethod(),client.inputMethod()).toString()},{"inputMethodStatus",client.inputMethodStatus()},{"inputLanguageCode",client.inputLanguageCode()},{"methodsCount",client.inputMethods().size()},{"epoch",QVariant::fromValue(client.contextEpoch())},{"generation",QVariant::fromValue(client.candidateEpoch())},{"connected",client.connected()},{"editable",client.editable()},{"sensitive",client.sensitive()},{"expanded",view&&view->rootObject()&&view->rootObject()->property("expanded").toBool()},{"transparencySupported",view&&view->rootObject()&&view->rootObject()->property("transparencySupported").toBool()},{"panelX",view?view->x():0},{"panelY",view?view->y():0},{"panelWidth",view?view->width():0},{"panelHeight",view?view->height():0},{"visible",state.visible()},{"settingsVisible",state.settingsOpen()},{"panelLoaded",view&&view->rootObject()!=nullptr},{"viewCreated",bool(view)},{"showSerial",QVariant::fromValue(showSerial_)},{"firstFrameSerial",QVariant::fromValue(view?view->firstFrameSerial():lastFrameSerial_)},{"firstFrameMs",view?view->firstFrameMilliseconds():lastFrameMs_},{"graphicsApi",view?1:0},{"renderer",QStringLiteral("qtgui-raster")},{"platform",QGuiApplication::platformName()},{"automatic",desktop.capabilities().automaticReady()},{"desktop",desktop.status()}};for(auto it=status.begin();it!=status.end();++it)value.insert(it.key(),it.value());return value;}
+ QVariantMap Status()const{
+  PanelStatus s=PanelStatus::fromVariantMap(desktop.placement());
+  QObject *root=view?view->rootObject():nullptr;
+  s.capsLock=bool(state.modifiers()&2);s.modifiers=state.modifiers();s.shortcutError=shortcutError_;
+  s.inputMethodName=client.inputMethodNames().value(client.inputMethod(),client.inputMethod()).toString();s.inputMethodStatus=client.inputMethodStatus();s.inputLanguageCode=client.inputLanguageCode();s.methodsCount=client.inputMethods().size();
+  s.epoch=client.contextEpoch();s.generation=client.candidateEpoch();s.connected=client.connected();s.editable=client.editable();s.sensitive=client.sensitive();
+  s.expanded=root&&root->property("expanded").toBool();s.transparencySupported=root&&root->property("transparencySupported").toBool();
+  s.panelX=view?view->x():0;s.panelY=view?view->y():0;s.panelWidth=view?view->width():0;s.panelHeight=view?view->height():0;
+  s.visible=state.visible();s.settingsVisible=state.settingsOpen();s.panelLoaded=root!=nullptr;s.viewCreated=bool(view);
+  s.showSerial=showSerial_;s.firstFrameSerial=view?view->firstFrameSerial():lastFrameSerial_;s.firstFrameMs=view?view->firstFrameMilliseconds():lastFrameMs_;
+  s.graphicsApi=view?1:0;s.renderer=QStringLiteral("qtgui-raster");s.platform=QGuiApplication::platformName();s.automatic=desktop.capabilities().automaticReady();s.desktop=desktop.status();
+  return s.toVariantMap();
+ }
  void Show(){if(locked_||state.settingsOpen()||prefs.mode()==2)return;if(state.visible()){state.manualShow();return;}showStart.start();showRequested_=true;if(ensurePanel()&&validSize())state.manualShow();if(!state.visible()){showRequested_=false;if(view)idleTimer.start();}}
  void Hide(){state.dismiss();}
  void Toggle(){if(state.visible())Hide();else Show();}
- void CompositorHide(){compositorHide();}
+ void CompositorHide(){state.cancelAll();client.refreshSnapshot();syncContext();}
  void ScheduleIdle(){synchronizeBrokerPolicy(++policySerial_);if(!state.visible())idleTimer.start();}
  void Settings(){if(locked_)return;state.cancelAll();if(ensurePanel()&&validSize()){client.refreshInputMethodNames();state.setSettingsOpen(true);}}
 
@@ -149,17 +131,27 @@ signals:
  void StateChanged(const QVariantMap &state);
 private:
  void retire(){
-  if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")||state.visible()||warningOpen_)return;
+  if(state.visible()||warningOpen_)return;
   auto m=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","ReleaseIdle");m.setArguments({Status()});
   auto watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,2000),this);
   connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,watcher]{QDBusPendingReply<bool> r=*watcher;watcher->deleteLater();if(!r.isError()&&r.value())qApp->quit();else if(!state.visible())idleTimer.start();});
  }
- KeySound sound;Preferences &prefs;FcitxClient &client;KeyboardState &state;DesktopAdapter &desktop;std::unique_ptr<NativePanel> view;const bool managed_=qEnvironmentVariableIsSet("AGINO_MANAGED_UI");bool warningOpen_=false,resizing_=false,wasConnected_=false,locked_=false,preferredInitialized_=false,preferredPending_=false,showRequested_=false;QString preferredIm_,shortcutError_;QElapsedTimer elapsed,showStart;QTimer timer,idleTimer;quint64 policySerial_=0,showSerial_=0,lastFrameSerial_=0;double lastFrameMs_=-1;
+ KeySound sound;Preferences &prefs;FcitxClient &client;KeyboardState &state;DesktopAdapter &desktop;std::unique_ptr<NativePanel> view;bool warningOpen_=false,resizing_=false,wasConnected_=false,locked_=false,showRequested_=false;QString shortcutError_;QElapsedTimer elapsed,showStart;QTimer timer,idleTimer;quint64 policySerial_=0,showSerial_=0,lastFrameSerial_=0;double lastFrameMs_=-1;
 };
 int main(int argc,char **argv){
  // The native QtGui raster frontend has no Qt Quick/scenegraph backend.
- bool settings=false,hidden=false;QString screenshot,errorMessage;bool information=false;
- for(int i=1;i<argc;++i){if((QByteArray(argv[i])=="--error-message"||QByteArray(argv[i])=="--information-message")&&i+1<argc){information=QByteArray(argv[i])=="--information-message";errorMessage=QString::fromLocal8Bit(argv[++i]);}else if(QByteArray(argv[i])=="--settings")settings=true;if(QByteArray(argv[i])=="--hidden")hidden=true;if(QByteArray(argv[i])=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))screenshot=QString::fromLocal8Bit(argv[++i]);}
+ bool settings=false,hidden=false,managed=false,information=false;QString screenshot,errorMessage;QByteArray resumeJson;
+ for(int i=1;i<argc;++i){
+  const QByteArray a(argv[i]);
+  if((a=="--error-message"||a=="--information-message")&&i+1<argc){information=a=="--information-message";errorMessage=QString::fromLocal8Bit(argv[++i]);}
+  else if(a=="--resume-json"&&i+1<argc)resumeJson=argv[++i];
+  else if(a=="--screenshot"&&i+1<argc&&qEnvironmentVariableIsSet("AGINO_TEST_HOOKS"))screenshot=QString::fromLocal8Bit(argv[++i]);
+  else if(a=="--managed")managed=true;
+  else if(a=="--settings")settings=true;
+  else if(a=="--hidden")hidden=true;
+ }
+ // Only the controller starts the window (it hands over the state and verifies the window in turn); the dialog helper mode needs neither.
+ if(!managed&&errorMessage.isEmpty()){std::fputs("agino-keyboard-ui is started by agino-keyboard\n",stderr);return 2;}
  if(qEnvironmentVariable("XDG_SESSION_TYPE")=="wayland"||!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))qputenv("QT_WAYLAND_SHELL_INTEGRATION","agino-keyboard");
  // The GUI connects normally; only compositor-launched Fcitx receives WAYLAND_SOCKET.
  qunsetenv("WAYLAND_SOCKET");
@@ -169,27 +161,20 @@ int main(int argc,char **argv){
  StartupDpiPolicy dpiPolicy;std::unique_ptr<QGuiApplication> application=std::make_unique<QGuiApplication>(argc,argv);auto &app=*application;dpiPolicy.restore();AginoI18n::install(app);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");app.setApplicationDisplayName(QCoreApplication::translate("Keyboard","Screen Keyboard"));app.setQuitOnLastWindowClosed(false);
  if(!errorMessage.isEmpty()){panelMessage(information,errorMessage);return information?0:2;}
 
- auto bus=QDBusConnection::sessionBus();const QString service=qEnvironmentVariableIsSet("AGINO_MANAGED_UI")?"org.agino.KeyboardPanel1":"org.agino.KeyboardUi1";
- if(!bus.registerService(service)){auto m=QDBusMessage::createMethodCall(service,"/Keyboard",service,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
+ auto bus=QDBusConnection::sessionBus();
+ if(!bus.registerService("org.agino.KeyboardPanel1")){qCInfo(lcWindow())<<"A keyboard window of this session exists already";return 0;}
  Preferences prefs;FcitxClient client;
- VirtualKeyboardUi ui;if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")&&!ui.start()){panelMessage(false,QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}if(ui.ownsInterface()&&!enableVirtualKeyboard()){panelMessage(false,QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
- KeyboardState state;DesktopAdapter desktop(nullptr,!qEnvironmentVariableIsSet("AGINO_MANAGED_UI"));
- if(QGuiApplication::platformName().startsWith("wayland")&&!desktop.capabilities().waylandReady()){qCritical().noquote()<<desktop.status();return 4;}
- if(qEnvironmentVariableIsSet("AGINO_MANAGED_UI")){
-  auto parentWatcher=new QDBusServiceWatcher("org.agino.KeyboardUi1",bus,QDBusServiceWatcher::WatchForOwnerChange,&app);
-  const QString parentOwner=bus.interface()->serviceOwner("org.agino.KeyboardUi1").value();
-  if(parentOwner.isEmpty())return 2;
-  // Only the controller may drive the window and see its state (SEC-10); the window started by hand next to the controller counts as well.
-  if(!PeerCheck::peerIs(bus,parentOwner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(QCoreApplication::applicationDirPath()+"/agino-keyboard"),programPath(QCoreApplication::applicationDirPath()+"/../bin/agino-keyboard")})){qWarning("org.agino.KeyboardUi1 is owned by %s, which is not the keyboard controller",qPrintable(parentOwner));return 2;}
-  controllerName=parentOwner;
-  QObject::connect(parentWatcher,&QDBusServiceWatcher::serviceOwnerChanged,&app,[&app,parentOwner](const QString &,const QString &,const QString &owner){if(owner!=parentOwner)app.quit();});
- }
- WindowManager manager(prefs,client,state,desktop);bus.registerObject("/Keyboard",&manager,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllSignals);
- QObject::connect(&ui,&VirtualKeyboardUi::inputMethodsChanged,&client,&FcitxClient::refreshInputMethodNames);
- QObject::connect(&ui,&VirtualKeyboardUi::showRequested,&manager,&WindowManager::compositorShow);QObject::connect(&ui,&VirtualKeyboardUi::hideRequested,&manager,&WindowManager::compositorHide);
- manager.apply();if(qEnvironmentVariableIsSet("AGINO_MANAGED_UI")){
-  manager.ScheduleIdle();auto ready=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","WorkerReady");bus.asyncCall(ready,2000);
- }
+ KeyboardState state;DesktopAdapter desktop(nullptr,false);
+ if(QGuiApplication::platformName().startsWith("wayland")&&!desktop.capabilities().waylandReady()){qCCritical(lcWindow()).noquote()<<desktop.status();return 4;}
+ auto parentWatcher=new QDBusServiceWatcher("org.agino.KeyboardUi1",bus,QDBusServiceWatcher::WatchForOwnerChange,&app);
+ const QString parentOwner=bus.interface()->serviceOwner("org.agino.KeyboardUi1").value();
+ if(parentOwner.isEmpty())return 2;
+ // Only the controller may drive the window and see its state (SEC-10); the window started by hand next to the controller counts as well.
+ if(!PeerCheck::peerIs(bus,parentOwner,{programPath(QStringLiteral(AGINO_TRUSTED_CONTROLLER)),programPath(QCoreApplication::applicationDirPath()+"/agino-keyboard"),programPath(QCoreApplication::applicationDirPath()+"/../bin/agino-keyboard")})){qCWarning(lcWindow(),"org.agino.KeyboardUi1 is owned by %s, which is not the keyboard controller",qPrintable(parentOwner));return 2;}
+ controllerName=parentOwner;
+ QObject::connect(parentWatcher,&QDBusServiceWatcher::serviceOwnerChanged,&app,[&app,parentOwner](const QString &,const QString &,const QString &owner){if(owner!=parentOwner)app.quit();});
+ WindowManager manager(prefs,client,state,desktop,PanelStatus::fromJson(resumeJson));if(!bus.registerObject("/Keyboard",&manager,QDBusConnection::ExportAllSlots|QDBusConnection::ExportAllSignals))qCCritical(lcWindow())<<"Cannot export the keyboard window object on the session bus:"<<bus.lastError().name();
+ manager.apply();manager.ScheduleIdle();auto ready=QDBusMessage::createMethodCall(controllerName,"/Keyboard","org.agino.KeyboardUi1","WorkerReady");bus.asyncCall(ready,2000);
  if(settings)QTimer::singleShot(0,&manager,&WindowManager::Settings);else if(!hidden)QTimer::singleShot(0,&manager,&WindowManager::Show);
  if(!screenshot.isEmpty())QTimer::singleShot(800,&app,[&]{if(manager.ensurePanel())manager.panel()->grabWindow().save(screenshot);app.quit();});
  QObject::connect(&app,&QCoreApplication::aboutToQuit,&state,&KeyboardState::cancelAll);return app.exec();

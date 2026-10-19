@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 option(AGINO_UNIT_TESTS "Build the unit tests (Qt Test and a private session bus)" ON)
-option(AGINO_BUILD_TESTS "Build the integration tests (they need Qt Quick, DTK declarative, GTK, Xvfb, ...)" ON)
+option(AGINO_BUILD_TESTS "Build the integration tests (they need GTK, Xvfb, nested KWin and Wayland sessions, ...)" ON)
 option(AGINO_WAYLAND_SHELL "Build the Qt Wayland shell plugin (uses private Qt interfaces)" ON)
 option(AGINO_FCITX_LAUNCHERS "Install the launchers and the desktop file for an Fcitx5 with the Agino frontends" ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui DBus Widgets)
@@ -30,9 +30,6 @@ target_compile_definitions(agino-keyboard-bridge PRIVATE AGINO_TRUSTED_CONTROLLE
 configure_file(addon/agino-keyboard.conf.in agino-keyboard.conf @ONLY)
 install(TARGETS agino-keyboard-bridge LIBRARY DESTINATION lib/x86_64-linux-gnu/fcitx5)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/agino-keyboard.conf DESTINATION share/fcitx5/addon)
-add_library(candidate-rows STATIC src/candidaterows.cpp)
-target_include_directories(candidate-rows PUBLIC src)
-target_link_libraries(candidate-rows PUBLIC Qt6::Gui)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CANBERRA REQUIRED IMPORTED_TARGET libcanberra)
 add_library(key-sound STATIC src/keysound.cpp)
@@ -66,6 +63,8 @@ add_library(idle-platform STATIC src/idleplatform.cpp)
 target_include_directories(idle-platform PUBLIC src)
 target_link_libraries(idle-platform PUBLIC Qt6::Core Qt6::DBus X11::X11 X11::Xi PkgConfig::WAYLAND)
 add_executable(agino-keyboard src/broker.cpp src/preferences.h)
+# The controller shows its error messages with the dialog program.
+add_dependencies(agino-keyboard agino-keyboard-dialog)
 target_link_libraries(agino-keyboard PRIVATE fcitx-client idle-platform)
 # The programs the controller trusts on the bus (see the bridge target above, SEC-10).
 target_compile_definitions(agino-keyboard PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
@@ -102,7 +101,7 @@ if(AGINO_XCB_MODULE)
   install(FILES ${AGINO_XCB_MODULE} DESTINATION lib/agino-keyboard/fcitx5)
 endif()
 
-# Production native QtGui frontend. QML is retained only by regression tests.
+# The native QtGui frontend of the keyboard.
 # The panel of the keyboard: one set of objects for the programs and the tests.
 add_library(native-panel OBJECT src/preferences.h native.qrc
  src/native/nativepanel.cpp src/native/nativepanel.h src/native/nativeoutput.cpp src/native/nativecandidaterows.cpp src/native/nativecandidaterows.h src/native/nativepainting.cpp
@@ -110,7 +109,7 @@ add_library(native-panel OBJECT src/preferences.h native.qrc
 target_include_directories(native-panel PUBLIC src src/native)
 target_link_libraries(native-panel PUBLIC fcitx-client panel-platform Qt6::Gui Dtk6::Gui X11::X11)
 add_executable(agino-keyboard-ui src/native-main.cpp)
-target_link_libraries(agino-keyboard-ui PRIVATE native-panel candidate-rows desktop-adapter key-sound)
+target_link_libraries(agino-keyboard-ui PRIVATE native-panel desktop-adapter key-sound)
 # The controller the keyboard window follows (SEC-10).
 target_compile_definitions(agino-keyboard-ui PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
 # Keyboard of the login and lock screens: embedded by window id, keys sent as X11 key events (no Fcitx5).

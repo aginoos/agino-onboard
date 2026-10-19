@@ -9,6 +9,7 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include "log.h"
 
 // Who is behind a bus name (SEC-10, SEC-20): the bus daemon vouches for the process id of a connection, /proc/<pid>/exe says
 // which program it runs. This stops other programs from posing as the Fcitx5 bridge, the controller or the session manager;
@@ -32,12 +33,13 @@ inline QString exeOf(const QDBusConnection &bus,const QString &name){
 // AGINO_TEST_HOOKS in the environment (the tests, which run their own programs) trusts every name.
 inline int check(const QDBusConnection &bus,const QString &name,const QStringList &allowed){
  if(qEnvironmentVariableIsSet("AGINO_TEST_HOOKS")){
-  static bool said=false;if(!said){said=true;qWarning("AGINO_TEST_HOOKS is set: the programs behind the bus names are not checked");}
+  static bool said=false;if(!said){said=true;qCWarning(lcSession(),"AGINO_TEST_HOOKS is set: the programs behind the bus names are not checked");}
   return 1;
  }
  const QString exe=exeOf(bus,name);
- if(exe.isEmpty())return -1;
+ if(exe.isEmpty()){qCDebug(lcSession())<<"The program behind"<<name<<"cannot be found (no pid or no /proc entry)";return -1;}
  for(const QString &path:allowed){const QString real=QFileInfo(path).canonicalFilePath();if(exe==path||(!real.isEmpty()&&exe==real))return 1;}
+ qCDebug(lcSession())<<"The program behind"<<name<<"is"<<exe<<", not an allowed one";
  return 0;
 }
 inline bool peerIs(const QDBusConnection &bus,const QString &name,const QStringList &allowed){return check(bus,name,allowed)>0;}
@@ -50,7 +52,7 @@ struct Gate{
   auto *iface=bus.interface();if(sender.isEmpty()||!iface)return false;
   const auto current=iface->serviceOwner(name);if(!current.isValid()||current.value()!=sender)return false;
   if(sender!=lastPeer){const int verdict=check(bus,sender,allowed);if(verdict<0)return false;lastPeer=sender;lastOk=verdict>0;}
-  if(!lastOk&&!warned.contains(sender)){warned.insert(sender);qWarning().noquote()<<"Ignoring"<<name<<"signals from"<<sender<<"("<<exeOf(bus,sender)<<"): not an expected program";}
+  if(!lastOk&&!warned.contains(sender)){warned.insert(sender);qCWarning(lcSession()).noquote()<<"Ignoring"<<name<<"signals from"<<sender<<"("<<exeOf(bus,sender)<<"): not an expected program";}
   return lastOk;
  }
 };

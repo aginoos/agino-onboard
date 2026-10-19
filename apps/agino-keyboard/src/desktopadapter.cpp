@@ -12,6 +12,7 @@
 #include <QDebug>
 #include <QSet>
 #include "peercheck.h"
+#include "log.h"
 #include "waylandproperties.h"
 #ifdef AGINO_WAYLAND_SHELL
 #include <qpa/qplatformnativeinterface.h>
@@ -29,6 +30,11 @@ namespace {
 // LockedChanged; dde-session-daemon (dde-daemon) owns org.freedesktop.ScreenSaver.
 PeerCheck::Gate sessionGate{"org.deepin.dde.SessionManager1",{"/usr/bin/dde-session"}};
 PeerCheck::Gate saverGate{"org.freedesktop.ScreenSaver",{"/usr/lib/deepin-daemon/dde-session-daemon"}};
+// The result of the platform detection, once (what the panel can do and what is missing).
+void logPlatform(bool wayland,const DesktopCapabilities &c){
+ QStringList missing;if(!c.layer)missing<<"layer-shell";if(!c.text)missing<<"text-input";if(!c.source)missing<<"input device detection";
+ qCInfo(lcSession()).noquote()<<"Platform:"<<(wayland?"Wayland":"X11")<<(missing.isEmpty()?QStringLiteral("nothing missing"):QStringLiteral("missing: %1").arg(missing.join(", ")));
+}
 }
 DesktopAdapter::DesktopAdapter(QObject *p,bool trackInputSource):QObject(p){
  wayland_=QGuiApplication::platformName().startsWith("wayland");
@@ -48,20 +54,21 @@ DesktopAdapter::DesktopAdapter(QObject *p,bool trackInputSource):QObject(p){
    QDBusPendingReply<QDBusVariant> r=*w;
    // Never undo a newer lock signal or trust a snapshot from a replaced owner.
    if(!r.isError()&&revision==lockRevision_)lock(r.value().variant().toBool());
+   else if(r.isError())qCWarning(lcSession()).noquote()<<"Cannot read the lock state of the session:"<<r.error().name();
    w->deleteLater();
   });
  }
  connect(qGuiApp,&QGuiApplication::screenRemoved,this,[this](QScreen *screen){if(screen==output_){emit outputChanged();setOutput(qGuiApp->primaryScreen());}});
  if(wayland_){detectWayland();return;}
- auto d=XOpenDisplay(nullptr);display_=d;if(!d)return;
+ auto d=XOpenDisplay(nullptr);display_=d;if(!d){qCWarning(lcSession())<<"Cannot open the X11 display";logPlatform(false,caps_);return;}
  caps_.layer=caps_.text=true;int event,error,major=2,minor=2;
  if(XQueryExtension(d,"XInputExtension",&xiOpcode_,&event,&error)&&XIQueryVersion(d,&major,&minor)==Success){if(trackInputSource){unsigned char mask[XIMaskLen(XI_LASTEVENT)]={};XISetMask(mask,XI_RawTouchBegin);XISetMask(mask,XI_RawKeyPress);XISetMask(mask,XI_RawButtonPress);XIEventMask events{XIAllMasterDevices,sizeof(mask),mask};XISelectEvents(d,DefaultRootWindow(d),&events,1);}caps_.source=true;}
  if(trackInputSource){notifier_=new QSocketNotifier(ConnectionNumber(d),QSocketNotifier::Read,this);connect(notifier_,&QSocketNotifier::activated,this,[this]{readXEvents();});}
- XFlush(d);
+ XFlush(d);logPlatform(false,caps_);
 }
 DesktopAdapter::~DesktopAdapter(){detach();delete notifier_;if(display_)XCloseDisplay(static_cast<Display*>(display_));}
 void DesktopAdapter::detectWayland(){
- auto display=wl_display_connect(nullptr);if(!display)return;auto registry=wl_display_get_registry(display);
+ auto display=wl_display_connect(nullptr);if(!display){qCWarning(lcSession())<<"Cannot connect to the Wayland display";logPlatform(true,caps_);return;}auto registry=wl_display_get_registry(display);
  static const wl_registry_listener listener={[](void *data,wl_registry *,uint32_t,const char *name,uint32_t){auto c=static_cast<DesktopCapabilities*>(data);QByteArray n(name);if(n=="zwlr_layer_shell_v1")c->layer=true;if(n=="zwp_text_input_manager_v1"||n=="zwp_text_input_manager_v2"||n=="zwp_text_input_manager_v3")c->text=true;},[](void *,wl_registry *,uint32_t){}};
  wl_registry_add_listener(registry,&listener,&caps_);wl_display_roundtrip(display);wl_registry_destroy(registry);wl_display_disconnect(display);
  // Check the actual selected integration before mapping any panel; never
@@ -76,7 +83,8 @@ void DesktopAdapter::detectWayland(){
  caps_.source=bus.interface()->isServiceRegistered("org.agino.KeyboardDevice1").value();
  bus.connect("org.agino.KeyboardDevice1","/org/agino/KeyboardDevice1","org.agino.KeyboardDevice1","SourceChanged",this,SLOT(deviceSource(uint,double,double)));
  auto watcher=new QDBusServiceWatcher("org.agino.KeyboardDevice1",bus,QDBusServiceWatcher::WatchForOwnerChange,this);
- connect(watcher,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &,const QString &,const QString &owner){caps_.source=!owner.isEmpty();emit capabilitiesChanged();});
+ connect(watcher,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &,const QString &,const QString &owner){caps_.source=!owner.isEmpty();qCInfo(lcSession())<<"Input device bridge"<<(caps_.source?"available":"gone");emit capabilitiesChanged();});
+ logPlatform(true,caps_);
 }
 bool DesktopAdapter::attach(QWindow *w){
  if(!w)return false;
@@ -157,8 +165,8 @@ QString DesktopAdapter::status()const{if(wayland_)return !caps_.waylandReady()?t
 void DesktopAdapter::readXEvents(){auto d=static_cast<Display*>(display_);while(XPending(d)){XEvent event;XNextEvent(d,&event);if(event.type!=GenericEvent||event.xcookie.extension!=xiOpcode_||!XGetEventData(d,&event.xcookie))continue;auto raw=static_cast<XIRawEvent*>(event.xcookie.data);int count;auto info=XIQueryDevice(d,raw->sourceid,&count);bool synthetic=info&&count&&QByteArray(info[0].name).contains("XTEST");if(info)XIFreeDeviceInfo(info);if(!synthetic){if(event.xcookie.evtype==XI_RawTouchBegin)emit inputSourceChanged(KeyboardState::Touch);else if(event.xcookie.evtype==XI_RawKeyPress)emit inputSourceChanged(KeyboardState::PhysicalKeyboard);else if(event.xcookie.evtype==XI_RawButtonPress&&!(raw->flags&XIPointerEmulated))emit inputSourceChanged(KeyboardState::Mouse);}XFreeEventData(d,&event.xcookie);}}
 void DesktopAdapter::sessionLock(bool value,const QDBusMessage &message){if(sessionGate.accept(QDBusConnection::sessionBus(),message.service()))lock(value);}
 void DesktopAdapter::screensaverFrom(bool value,const QDBusMessage &message){if(saverGate.accept(QDBusConnection::sessionBus(),message.service()))screensaver(value);}
-void DesktopAdapter::lock(bool v){++lockRevision_;locked_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
-void DesktopAdapter::sleeping(bool v){sleeping_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
+void DesktopAdapter::lock(bool v){++lockRevision_;if(locked_!=v)qCInfo(lcSession())<<"Session lock:"<<(v?"locked":"unlocked");locked_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
+void DesktopAdapter::sleeping(bool v){if(sleeping_!=v)qCInfo(lcSession())<<"Sleep:"<<(v?"preparing for sleep":"resumed");sleeping_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
 
 void DesktopAdapter::deviceSource(uint kind,double x,double y){
  if(kind<KeyboardState::Mouse||kind>KeyboardState::PhysicalKeyboard)return;
@@ -170,7 +178,7 @@ QScreen *DesktopAdapter::targetOutput()const{
  if(!display_)return output_;auto d=static_cast<Display*>(display_);Window focus;int revert;XGetInputFocus(d,&focus,&revert);if(focus==None||focus==PointerRoot)return output_;XWindowAttributes a{};Window ignored;int x,y;if(!XGetWindowAttributes(d,focus,&a)||!XTranslateCoordinates(d,focus,DefaultRootWindow(d),a.width/2,a.height/2,&x,&y,&ignored))return output_;auto screen=qGuiApp->screenAt(QPoint(x,y));return screen?screen:output_.data();
 }
 
-void DesktopAdapter::screensaver(bool v){screensaver_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
+void DesktopAdapter::screensaver(bool v){if(screensaver_!=v)qCInfo(lcSession())<<"Screensaver:"<<(v?"active":"inactive");screensaver_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
 
 QVariantMap DesktopAdapter::placement()const{return {{"floating",floating_},{"floatX",position_.x()},{"floatY",position_.y()},{"outputName",output_?output_->name():retainedOutput_?retainedOutput_->name():QString()}};}
 void DesktopAdapter::restorePlacement(const QVariantMap &value){

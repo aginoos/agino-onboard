@@ -24,6 +24,9 @@
 #include <unordered_set>
 #include "sogoupanel.h"
 using namespace fcitx;
+// Own log category: fcitx5 --verbose agino-keyboard=5 (or FCITX_LOGLEVEL) switches the debug lines on. Never log what is typed (keys, preedit, candidates).
+namespace {FCITX_DEFINE_LOG_CATEGORY(aginoLog,"agino-keyboard")}
+#define AGINO_LOG(level) FCITX_LOGC(aginoLog,level)
 using Snapshot=std::tuple<uint64_t,uint64_t,bool,bool,std::string,std::string,std::vector<std::string>,bool,bool,std::string,int32_t,int32_t>;
 // An empty, unfocused context clears an existing popup without changing the
 // active composition or sending empty preedit text to the target application.
@@ -48,7 +51,7 @@ public:
   epoch_=(uint64_t(std::random_device{}()&0xfffff)<<32);bus_.attachEventLoop(&instance_->eventLoop());
   // During fcitx5 -r the old addon owns this name until it exits.
   // Queue the new connection instead of failing addon initialization.
-  bus_.requestName("org.agino.Keyboard1",dbus::RequestNameFlag::Queue);
+  if(!bus_.requestName("org.agino.Keyboard1",dbus::RequestNameFlag::Queue))AGINO_LOG(Warn)<<"agino-keyboard: requesting the bus name org.agino.Keyboard1 returned false (queued or refused)";
   warnForeignOwner();
   bus_.addObjectVTable("/org/agino/Keyboard1","org.agino.Keyboard1",*this);
   ownerWatch_=bus_.addMatch(dbus::MatchRule("org.freedesktop.DBus","/org/freedesktop/DBus","org.freedesktop.DBus","NameOwnerChanged"),[this](dbus::Message &message){
@@ -67,8 +70,9 @@ public:
   watch(EventType::InputContextKeyEvent,EventWatcherPhase::PreInputMethod,[this](Event &e){if(focus()==static_cast<KeyEvent &>(e).inputContext())sogou_->invalidate();if(testHooks_&&!static_cast<KeyEvent &>(e).isVirtual())physical();});
   for(auto t:{EventType::InputContextInputMethodActivated,EventType::InputContextInputMethodDeactivated,EventType::InputMethodGroupChanged})
    watch(t,EventWatcherPhase::PostInputMethod,[this](Event &){++candidate_;notify();});
+  AGINO_LOG(Info)<<"agino-keyboard: focus bridge loaded"<<(testHooks_?" (AGINO_TEST_HOOKS is set: callers are not checked)":"");
  }
- ~FocusBridge() override {handlers_.clear();panelSender_.clear();sogou_->setActive(false,0,editable()&&!sensitive()&&instance_->currentInputMethod()==SogouPanel::inputMethod);restorePanel(false);releaseAll();bus_.flush();}
+ ~FocusBridge() override {AGINO_LOG(Info)<<"agino-keyboard: focus bridge unloaded";handlers_.clear();panelSender_.clear();sogou_->setActive(false,0,editable()&&!sensitive()&&instance_->currentInputMethod()==SogouPanel::inputMethod);restorePanel(false);releaseAll();bus_.flush();}
  InputContext *focus()const{return focusRef_.get();}
  bool editable()const{return !suspended_&&focus()&&focus()->hasFocus()&&!focus()->capabilityFlags().test(CapabilityFlag::NoOnScreenKeyboard);}
  bool sensitive()const{return safe_||(focus()&&focus()->capabilityFlags().testAny(CapabilityFlag::PasswordOrSensitive));}
@@ -86,6 +90,7 @@ public:
     if(bulk){next=total>int(words.size());if(total<0&&int(words.size())==limit_){try{bulk->candidateFromAll(limit_);next=true;}catch(...){next=false;}}if(limit_>=1024)next=false;}else if(auto pages=list->toPageable()){prev=pages->hasPrev();next=pages->hasNext();}
    }
   }
+  noteSogou();
   if(sogou_->ready()){const auto &s=sogou_->data();words=s.words;preedit=s.composition;prev=s.prev;next=s.next;}
   auto rect=focus()?focus()->cursorRect():Rect{};
   return {epoch_,candidate_,editable(),sensitive(),preedit,editable()?instance_->currentInputMethod():"",words,prev,next,sensitive()?"sensitive":"unknown",rect.left(),rect.top()};
@@ -109,15 +114,16 @@ public:
  // The trust check is here, not in getSnapshot(), because notify() calls that without a message; an untrusted caller must not trigger its side effects either.
  Snapshot querySnapshot(){
   if(!trusted())throw dbus::MethodCallError("org.freedesktop.DBus.Error.AccessDenied","only the keyboard programs may read the snapshot");
-  subscribers_.insert(currentMessage()->sender());
+  if(subscribers_.insert(currentMessage()->sender()).second)AGINO_LOG(Debug)<<"agino-keyboard: subscriber added: "<<currentMessage()->sender()<<" ("<<subscribers_.size()<<" in all)";
   return getSnapshot();
  }
  // Warn (only) when the bus name is held by another connection right after the request. This is normal for a moment during fcitx5 -r (old addon still exiting).
  void warnForeignOwner(){
   const auto owner=bus_.serviceOwner("org.agino.Keyboard1",500000);
-  if(owner.empty()||owner==bus_.uniqueName())return;
+  if(owner==bus_.uniqueName()){AGINO_LOG(Info)<<"agino-keyboard: acquired the bus name org.agino.Keyboard1 as "<<owner;return;}
+  if(owner.empty()){AGINO_LOG(Warn)<<"agino-keyboard: org.agino.Keyboard1 has no owner after the request";return;}
   const auto pid=busCredential("GetConnectionUnixProcessID",owner);
-  FCITX_WARN()<<"agino-keyboard: bus name org.agino.Keyboard1 is owned by "<<owner<<" (pid "<<pid<<"), not by this fcitx5; queued until it exits (expected only while a previous fcitx5 is shutting down)";
+  AGINO_LOG(Warn)<<"agino-keyboard: bus name org.agino.Keyboard1 is owned by "<<owner<<" (pid "<<pid<<"), not by this fcitx5; queued until it exits (expected only while a previous fcitx5 is shutting down)";
  }
  // Caller authentication: state-changing methods accept only the keyboard programs of the same user (the bus daemon vouches for uid and pid).
  bool trustedUid(const std::string &sender){return busCredential("GetConnectionUnixUser",sender)==geteuid();}
@@ -145,7 +151,7 @@ public:
   if(refused!=denied_.end()&&now<refused->second)return false;
   const auto pid=busCredential("GetConnectionUnixProcessID",sender);
   if(trustedUid(sender)&&(testHooks_||(pid!=~uint64_t(0)&&trustedExe(pid)))){trusted_.insert(sender);return true;}
-  if(refused==denied_.end())FCITX_WARN()<<"agino-keyboard: rejected a call from untrusted bus name "<<sender<<" (pid "<<pid<<")";
+  if(refused==denied_.end())AGINO_LOG(Warn)<<"agino-keyboard: rejected a call from untrusted bus name "<<sender<<" (pid "<<pid<<")";
   denied_[sender]=now+std::chrono::seconds(2);
   return false;
  }
@@ -192,7 +198,7 @@ public:
   else if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
  }
  void releaseSender(const std::string &sender){
-  trusted_.erase(sender);denied_.erase(sender);subscribers_.erase(sender);
+  trusted_.erase(sender);denied_.erase(sender);if(subscribers_.erase(sender))AGINO_LOG(Debug)<<"agino-keyboard: subscriber removed: "<<sender<<" ("<<subscribers_.size()<<" left)";
   if(panelSender_==sender){panelSender_.clear();restorePanel(true);}
   decltype(held_) lost;
   for(auto it=held_.begin();it!=held_.end();){if(it->second.sender==sender){lost.emplace(it->first,it->second);it=held_.erase(it);}else ++it;}
@@ -203,12 +209,15 @@ public:
 private:
  void sogouChanged(){
   ++candidate_;
+  noteSogou();
   if(sogou_->ready()&&editable()&&!sensitive()&&!panelSender_.empty()&&focus()->capabilityFlags().test(CapabilityFlag::Preedit)){
    capturePanel(false);auto &panel=focus()->inputPanel();if(!preeditOverridden_||panel.clientPreedit().toString()!=overriddenPreedit_.toString())previousClientPreedit_=panel.clientPreedit();
    overriddenPreedit_=Text(sogou_->data().composition);overriddenPreedit_.setCursor(sogou_->data().composition.size());preeditOverridden_=true;panel.setClientPreedit(overriddenPreedit_);focus()->updatePreedit();
   }else if(preeditOverridden_)restorePanel(false);
   notify();
  }
+ // One line when the Sogou panel starts or stops delivering the candidates (a state change only).
+ void noteSogou(){if(sogou_->ready()==sogouReady_)return;sogouReady_=sogou_->ready();AGINO_LOG(Info)<<(sogouReady_?"agino-keyboard: the Sogou panel is found, its candidates are used":"agino-keyboard: the Sogou panel is not available, the Fcitx5 candidates are used");}
  struct PanelCallback {void operator()(InputContext *)const{}};
  void capturePanel(bool clearPopup){
   auto *ic=focus();if(!ic||!ic->hasFocus())return;
@@ -243,7 +252,7 @@ private:
   previousPanelCallback_={};panelContext_.unwatch();
   if(update&&ic&&ic->hasFocus())ic->updateUserInterface(UserInterfaceComponent::InputPanel,true);
  }
- bool preeditOverridden_=false;Text previousClientPreedit_,overriddenPreedit_;
+ bool sogouReady_=false;bool preeditOverridden_=false;Text previousClientPreedit_,overriddenPreedit_;
  std::string panelSender_;TrackableObjectReference<InputContext> panelContext_;CustomInputPanelCallback previousPanelCallback_;
  FCITX_OBJECT_VTABLE_METHOD(setPanelVisible,"SetPanelVisible","b","");
  FCITX_OBJECT_VTABLE_METHOD(suspend,"Suspend","b","");

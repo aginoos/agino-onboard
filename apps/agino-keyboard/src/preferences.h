@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QSettings>
 #include <QVariantMap>
+#include "log.h"
 class Preferences:public QObject {
  Q_OBJECT
  Q_PROPERTY(bool functionRow READ functionRow WRITE setFunctionRow NOTIFY changed)
@@ -33,11 +34,13 @@ public:
  void setKeySound(bool v){set("keySound",v);}void setScreenIndex(int v){set("screenIndex",v);}
  void setTheme(int v){set("theme",qBound(0,v,2));}void setSafeInput(bool v){set("safeInput",v);}
  void setShortcut(const QString &v){set("shortcut",v);}void setPreferredIm(const QString &v){set("preferredIm",v);}
- Q_INVOKABLE void reload(){if(!memoryOnly_){settings_.sync();normalizeOpacity();}emit changed();}
+ Q_INVOKABLE void reload(){if(!memoryOnly_){synced();normalizeOpacity();}emit changed();}
 signals:void changed();
 private:
- void normalizeOpacity(){if(settings_.contains("opacityPercent")){const int saved=settings_.value("opacityPercent").toInt(),clamped=qBound(50,saved,100);if(saved!=clamped){settings_.setValue("opacityPercent",clamped);settings_.sync();}}}
+ // A settings file that cannot be read or written is reported once (the path, not the content).
+ void synced(){settings_.sync();if(settings_.status()!=QSettings::NoError&&!failureLogged_){failureLogged_=true;qCWarning(lcController()).noquote()<<"The settings file"<<settings_.fileName()<<"cannot be used:"<<(settings_.status()==QSettings::AccessError?"access error (not writable?)":"format error");}}
+ void normalizeOpacity(){if(settings_.contains("opacityPercent")){const int saved=settings_.value("opacityPercent").toInt(),clamped=qBound(50,saved,100);if(saved!=clamped){settings_.setValue("opacityPercent",clamped);synced();}}}
  QVariant get(const QString &k,const QVariant &fallback=QVariant())const{return memoryOnly_?memory_.value(k,fallback):settings_.value(k,fallback);}
- void set(const QString &k,const QVariant &v){if(get(k)==v)return;if(memoryOnly_)memory_.insert(k,v);else{settings_.setValue(k,v);settings_.sync();}emit changed();}
- bool memoryOnly_=false;QVariantMap memory_;QSettings settings_;
+ void set(const QString &k,const QVariant &v){if(get(k)==v)return;if(memoryOnly_)memory_.insert(k,v);else{settings_.setValue(k,v);synced();}emit changed();}
+ bool memoryOnly_=false,failureLogged_=false;QVariantMap memory_;QSettings settings_;
 };

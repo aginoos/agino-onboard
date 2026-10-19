@@ -17,6 +17,7 @@
 #include <QSocketNotifier>
 #include <QTimer>
 #include "peercheck.h"
+#include "log.h"
 #include <QVariantMap>
 #include <cmath>
 #include <wayland-client.h>
@@ -77,6 +78,8 @@ struct IdlePlatform::Private: QDBusVirtualObject {
  explicit Private(IdlePlatform *p):QDBusVirtualObject(p),q(p){}
  ~Private() override {unregisterShortcut();bus.unregisterObject("/StatusNotifierItem");bus.unregisterObject("/MenuBar");delete notifier;if(display)XCloseDisplay(display);}
  void publishLock(){emit q->lockedChanged(locked||saver||sleep);}
+ // One log line per change of a lock source (the sources are signalled again with the same value now and then).
+ void noteChange(const char *what,bool before,bool now,const char *on,const char *off){if(before!=now)qCInfo(lcSession())<<what<<(now?on:off);}
  void unregisterShortcut(){
   ++generation;
   if(!shortcutPath.isEmpty())bus.disconnect(accel,shortcutPath,"org.kde.kglobalaccel.Component","globalShortcutPressed",q,SLOT(shortcutPressed(QString,QString,qlonglong,QDBusMessage)));
@@ -86,30 +89,34 @@ struct IdlePlatform::Private: QDBusVirtualObject {
  void bindShortcut(){
   if(!shortcutConfigured)return;
   unregisterShortcut();const auto serial=generation;int key=IdlePlatform::parseShortcut(shortcut);
-  if(!key){shortcutFailure=QCoreApplication::translate("Keyboard","A shortcut needs a modifier key and a valid key");emit q->capabilitiesChanged();return;}
+  if(!key){shortcutFailure=QCoreApplication::translate("Keyboard","A shortcut needs a modifier key and a valid key");qCWarning(lcSession()).noquote()<<"Global shortcut not registered:"<<shortcutFailure<<"(configured:"<<shortcut<<")";emit q->capabilitiesChanged();return;}
   shortcutFailure=QCoreApplication::translate("Keyboard","Shortcut registration failed");
   auto registration=method(accel,"/kglobalaccel","org.kde.KGlobalAccel","doRegister",{actionId()});registration.setAutoStartService(true);
   auto *w=new QDBusPendingCallWatcher(bus.asyncCall(registration,1000),q);
   QObject::connect(w,&QDBusPendingCallWatcher::finished,q,[this,w,serial,key]{
    QDBusPendingReply<> reply=*w;w->deleteLater();if(serial!=generation)return;
-   if(reply.isError()){emit q->capabilitiesChanged();return;}
+   if(reply.isError()){qCWarning(lcSession()).noquote()<<"Global shortcut registration failed:"<<shortcutFailure<<"(doRegister:"<<reply.error().name()<<")";emit q->capabilitiesChanged();return;}
    auto *s=new QDBusPendingCallWatcher(bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","setShortcut",{actionId(),QVariant::fromValue(QList<int>{key}),uint(6)}),1000),q);
    QObject::connect(s,&QDBusPendingCallWatcher::finished,q,[this,s,serial,key]{
     QDBusPendingReply<QList<int>> assigned=*s;s->deleteLater();if(serial!=generation)return;
-    if(assigned.isError()||!assigned.value().contains(key)){emit q->capabilitiesChanged();return;}
+    if(assigned.isError()||!assigned.value().contains(key)){qCWarning(lcSession()).noquote()<<"Global shortcut registration failed:"<<shortcutFailure<<(assigned.isError()?QStringLiteral("(setShortcut: %1)").arg(assigned.error().name()):QStringLiteral("(not assigned: another action may hold it)"));emit q->capabilitiesChanged();return;}
     auto *c=new QDBusPendingCallWatcher(bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","getComponent",{component}),1000),q);
     QObject::connect(c,&QDBusPendingCallWatcher::finished,q,[this,c,serial]{
      QDBusPendingReply<QDBusObjectPath> path=*c;c->deleteLater();if(serial!=generation)return;
      if(!path.isError()){
       shortcutPath=path.value().path();
-      if(bus.connect(accel,shortcutPath,"org.kde.kglobalaccel.Component","globalShortcutPressed",q,SLOT(shortcutPressed(QString,QString,qlonglong,QDBusMessage))))shortcutFailure.clear();
-     }
+      if(bus.connect(accel,shortcutPath,"org.kde.kglobalaccel.Component","globalShortcutPressed",q,SLOT(shortcutPressed(QString,QString,qlonglong,QDBusMessage)))){shortcutFailure.clear();qCInfo(lcSession())<<"Global shortcut registered";}
+      else qCWarning(lcSession()).noquote()<<"Global shortcut registration failed:"<<shortcutFailure<<"(cannot connect to the signal of"<<shortcutPath<<")";
+     }else qCWarning(lcSession()).noquote()<<"Global shortcut registration failed:"<<shortcutFailure<<"(getComponent:"<<path.error().name()<<")";
      emit q->capabilitiesChanged();
     });
    });
   });
  }
- void registerTray(){bus.asyncCall(method(watcher,"/StatusNotifierWatcher",watcher,"RegisterStatusNotifierItem",{QStringLiteral("/StatusNotifierItem")}));}
+ void registerTray(){
+  auto *w=new QDBusPendingCallWatcher(bus.asyncCall(method(watcher,"/StatusNotifierWatcher",watcher,"RegisterStatusNotifierItem",{QStringLiteral("/StatusNotifierItem")})),q);
+  QObject::connect(w,&QDBusPendingCallWatcher::finished,q,[w]{QDBusPendingReply<> reply=*w;w->deleteLater();if(reply.isError())qCWarning(lcSession()).noquote()<<"Tray registration failed:"<<reply.error().name();else qCInfo(lcSession())<<"Tray item registered";});
+ }
  QVariant trayProperty(const QString &name)const {
   if(name=="Category")return "ApplicationStatus";
   if(name=="Id")return component;
@@ -210,13 +217,14 @@ IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<P
   connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,lockRevision]{
    QDBusPendingReply<QDBusVariant> reply=*w;
    // A startup snapshot may arrive after a newer signal or owner replacement.
-   if(!reply.isError()&&lockRevision==d->lockRevision){d->locked=reply.value().variant().toBool();d->publishLock();}
+   if(!reply.isError()&&lockRevision==d->lockRevision){const bool value=reply.value().variant().toBool();d->noteChange("Session lock (start state):",d->locked,value,"locked","unlocked");d->locked=value;d->publishLock();}
+   else if(reply.isError())qCWarning(lcSession()).noquote()<<"Cannot read the lock state of the session:"<<reply.error().name();
    w->deleteLater();
   });
  }
  if(d->wl){
   auto *display=wl_display_connect(nullptr);
-  if(display){auto *registry=wl_display_get_registry(display);static const wl_registry_listener listener={[](void *data,wl_registry*,uint32_t,const char *name,uint32_t){auto *p=static_cast<Private*>(data);QByteArray n(name);if(n=="zwlr_layer_shell_v1")p->layer=true;if(n=="zwp_text_input_manager_v1"||n=="zwp_text_input_manager_v2"||n=="zwp_text_input_manager_v3")p->text=true;},[](void*,wl_registry*,uint32_t){}};wl_registry_add_listener(registry,&listener,d.get());wl_display_roundtrip(display);wl_registry_destroy(registry);wl_display_disconnect(display);}
+  if(display){auto *registry=wl_display_get_registry(display);static const wl_registry_listener listener={[](void *data,wl_registry*,uint32_t,const char *name,uint32_t){auto *p=static_cast<Private*>(data);QByteArray n(name);if(n=="zwlr_layer_shell_v1")p->layer=true;if(n=="zwp_text_input_manager_v1"||n=="zwp_text_input_manager_v2"||n=="zwp_text_input_manager_v3")p->text=true;},[](void*,wl_registry*,uint32_t){}};wl_registry_add_listener(registry,&listener,d.get());wl_display_roundtrip(display);wl_registry_destroy(registry);wl_display_disconnect(display);}else qCWarning(lcSession())<<"Cannot connect to the Wayland display";
   d->source=bus.interface()->isServiceRegistered(device).value();
   bus.connect(device,"/org/agino/KeyboardDevice1",device,"SourceChanged",this,SLOT(deviceSource(uint,double,double,QDBusMessage)));
  }else{
@@ -224,10 +232,11 @@ IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<P
   if(d->display){int event,error,major=2,minor=2;d->layer=d->text=true;
    if(XQueryExtension(d->display,"XInputExtension",&d->opcode,&event,&error)&&XIQueryVersion(d->display,&major,&minor)==Success){unsigned char mask[XIMaskLen(XI_LASTEVENT)]={};XISetMask(mask,XI_RawTouchBegin);XISetMask(mask,XI_RawKeyPress);XISetMask(mask,XI_RawButtonPress);XIEventMask events{XIAllMasterDevices,sizeof(mask),mask};d->source=XISelectEvents(d->display,DefaultRootWindow(d->display),&events,1)==Success;}
    d->notifier=new QSocketNotifier(ConnectionNumber(d->display),QSocketNotifier::Read,this);connect(d->notifier,&QSocketNotifier::activated,this,[this]{d->readX();});XFlush(d->display);
-  }
+  }else qCWarning(lcSession())<<"Cannot open the X11 display";
  }
+ {QStringList missing;if(!d->layer)missing<<"layer-shell";if(!d->text)missing<<"text-input";if(!d->source)missing<<"input device detection";qCInfo(lcSession()).noquote()<<"Platform:"<<(d->wl?"Wayland":"X11")<<(missing.isEmpty()?QStringLiteral("nothing missing"):QStringLiteral("missing: %1").arg(missing.join(", ")));}
  auto *services=new QDBusServiceWatcher(this);services->setConnection(bus);services->setWatchMode(QDBusServiceWatcher::WatchForOwnerChange);services->addWatchedService(watcher);services->addWatchedService(accel);services->addWatchedService(session);if(d->wl)services->addWatchedService(device);
- connect(services,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &name,const QString &,const QString &newOwner){if(name==watcher&&!newOwner.isEmpty())d->registerTray();else if(name==accel){if(newOwner.isEmpty()){d->unregisterShortcut();d->shortcutFailure=QCoreApplication::translate("Keyboard","Shortcut registration failed");emit capabilitiesChanged();}else d->bindShortcut();}else if(name==session){++d->lockRevision;}else if(name==device){d->source=!newOwner.isEmpty();emit capabilitiesChanged();}});
+ connect(services,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &name,const QString &,const QString &newOwner){if(name==watcher&&!newOwner.isEmpty())d->registerTray();else if(name==accel){if(newOwner.isEmpty()){qCInfo(lcSession())<<"kglobalaccel went away, the global shortcut is gone";d->unregisterShortcut();d->shortcutFailure=QCoreApplication::translate("Keyboard","Shortcut registration failed");emit capabilitiesChanged();}else d->bindShortcut();}else if(name==session){++d->lockRevision;}else if(name==device){d->source=!newOwner.isEmpty();qCInfo(lcSession())<<"Input device bridge"<<(d->source?"available":"gone");emit capabilitiesChanged();}});
  bus.registerVirtualObject("/StatusNotifierItem",d.get());bus.registerVirtualObject("/MenuBar",d.get());d->registerTray();
 }
 IdlePlatform::~IdlePlatform()=default;
@@ -239,9 +248,9 @@ QString IdlePlatform::status()const{
 }
 QString IdlePlatform::shortcutError()const{return d->shortcutFailure;}
 void IdlePlatform::setShortcut(QString text){if(d->shortcutConfigured&&d->shortcut==text)return;d->shortcutConfigured=true;d->shortcut=text;d->bindShortcut();}
-void IdlePlatform::lock(bool value,const QDBusMessage &m){if(d->sessionGate.accept(d->bus,m.service())){++d->lockRevision;d->locked=value;d->publishLock();}}
-void IdlePlatform::screensaver(bool value,const QDBusMessage &m){if(d->saverGate.accept(d->bus,m.service())){d->saver=value;d->publishLock();}}
-void IdlePlatform::sleeping(bool value,const QDBusMessage &m){if(owner(QDBusConnection::systemBus(),"org.freedesktop.login1",m)){d->sleep=value;d->publishLock();}}
+void IdlePlatform::lock(bool value,const QDBusMessage &m){if(d->sessionGate.accept(d->bus,m.service())){++d->lockRevision;d->noteChange("Session lock:",d->locked,value,"locked","unlocked");d->locked=value;d->publishLock();}}
+void IdlePlatform::screensaver(bool value,const QDBusMessage &m){if(d->saverGate.accept(d->bus,m.service())){d->noteChange("Screensaver:",d->saver,value,"active","inactive");d->saver=value;d->publishLock();}}
+void IdlePlatform::sleeping(bool value,const QDBusMessage &m){if(owner(QDBusConnection::systemBus(),"org.freedesktop.login1",m)){d->noteChange("Sleep:",d->sleep,value,"preparing for sleep","resumed");d->sleep=value;d->publishLock();}}
 void IdlePlatform::deviceSource(uint kind,double x,double y,const QDBusMessage &m){if(kind>=1&&kind<=4&&std::isfinite(x)&&std::isfinite(y)&&owner(d->bus,device,m))emit sourceChanged(int(kind),x,y);}
 void IdlePlatform::shortcutPressed(const QString &app,const QString &name,qlonglong,const QDBusMessage &m){if(app==component&&name==action&&m.path()==d->shortcutPath&&owner(d->bus,accel,m))emit toggleRequested();}
 int IdlePlatform::parseShortcut(const QString &text){

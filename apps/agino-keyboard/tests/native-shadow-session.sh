@@ -22,5 +22,5 @@ for ((i=0;i<100;i++));do
  kill -0 "$wm_pid" || { cat "$XDG_RUNTIME_DIR/kwin.log";exit 2; }
  sleep .1
 done
-export AGINO_TEST_NATIVE_SHADOW=1 QT_QPA_PLATFORM='dxcb;xcb' QT_QUICK_BACKEND=software
+export AGINO_TEST_NATIVE_SHADOW=1 QT_QPA_PLATFORM='dxcb;xcb'
 if ! "$@";then cat "$XDG_RUNTIME_DIR/kwin.log";exit 1;fi

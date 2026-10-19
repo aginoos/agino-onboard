@@ -10,7 +10,6 @@
 #include <QProcess>
 #include <QDBusArgument>
 #include <QDBusMetaType>
-#include <QSGRendererInterface>
 #include <csignal>
 #include <pwd.h>
 #include <unistd.h>
@@ -424,10 +423,10 @@ private slots:
    QDBusInterface ui("org.agino.KeyboardUi1","/Keyboard","org.agino.KeyboardUi1");ui.call("Show");
    auto status=[&](){QDBusReply<QVariantMap> r=ui.call("Status");return r.value();};
    QTRY_VERIFY(status().value("visible").toBool());
-   // Qt Quick backend flags apply only to the retained reference frontend.
-   // The native QtGui frontend always rasterizes, with no scenegraph runtime.
-   const bool nativeRaster=status().value("renderer").toString()==QStringLiteral("qtgui-raster");
-   const int expected=int(nativeRaster||mode==0?QSGRendererInterface::Software:QSGRendererInterface::OpenGL);
+   // Qt Quick backend flags do not apply to the native QtGui frontend: it always
+   // rasterizes (status reports graphicsApi 1, the value of QSGRendererInterface::Software).
+   QCOMPARE(status().value("renderer").toString(),QStringLiteral("qtgui-raster"));
+   constexpr int expected=1;
    QTRY_COMPARE(status().value("graphicsApi").toInt(),expected);
    QVERIFY(target.hasFocus());
    ui.call("Hide");QTRY_VERIFY(!status().value("visible").toBool());

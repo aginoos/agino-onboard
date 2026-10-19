@@ -26,6 +26,7 @@
 #include "focusguard.h"
 #include "i18n.h"
 #include "keysender.h"
+#include "log.h"
 #include "preferences.h"
 #include "startupdpi.h"
 #include "native/nativepanel.h"
@@ -43,7 +44,8 @@ public:
  // session: the pid of the session program that started us (its windows are the only ones that get keys).
  XlibBackend(WId own,pid_t session):own_(own),session_(session),display_(XOpenDisplay(nullptr)){
   int event=0,error=0,major=0,minor=0;
-  if(display_&&!XTestQueryExtension(display_,&event,&error,&major,&minor)){XCloseDisplay(display_);display_=nullptr;}
+  if(!display_)qCWarning(lcEmbed(),"agino-keyboard-embed: cannot open the X11 display");
+  else if(!XTestQueryExtension(display_,&event,&error,&major,&minor)){qCWarning(lcEmbed(),"agino-keyboard-embed: the X server has no XTEST extension");XCloseDisplay(display_);display_=nullptr;}
  }
  ~XlibBackend()override{if(display_)XCloseDisplay(display_);}
  bool ready()const{return display_;}
@@ -53,8 +55,8 @@ public:
   // One line when the verdict is first known and when it changes (no line per key, never the key).
   if(!known_||reason!=verdict_){
    known_=true;verdict_=reason;
-   if(accepted)std::fprintf(stderr,"agino-keyboard-embed: the input focus is in the window of the session program, keys are sent\n");
-   else std::fprintf(stderr,"agino-keyboard-embed: keys are dropped (%s)\n",reason);
+   if(accepted)qCInfo(lcEmbed(),"agino-keyboard-embed: the input focus is in the window of the session program, keys are sent");
+   else qCInfo(lcEmbed(),"agino-keyboard-embed: keys are dropped (%s)",reason);
   }
   return accepted;
  }
@@ -151,7 +153,7 @@ int main(int argc,char **argv){
  // ends the program through the event loop (below), so that the keys that are still down are released.
  const pid_t parent=getppid();
  prctl(PR_SET_PDEATHSIG,SIGTERM);
- if(getppid()!=parent)return 0;   // the parent ended before the signal was set up
+ if(getppid()!=parent){qCInfo(lcEmbed(),"agino-keyboard-embed: the session program ended before the start");return 0;}   // the parent ended before the signal was set up
  if(pipe2(signalPipe,O_CLOEXEC|O_NONBLOCK)==0){
   struct sigaction action{};action.sa_handler=onSignal;sigemptyset(&action.sa_mask);
   for(const int number:{SIGTERM,SIGINT,SIGHUP})sigaction(number,&action,nullptr);
@@ -181,7 +183,8 @@ int main(int argc,char **argv){
  panel.setPosition(-30000,-30000);   // mapped off screen until the session program reparents it
 
  XlibBackend backend(panel.winId(),parent);
- if(!backend.ready()){std::fprintf(stderr,"agino-keyboard-embed: cannot open the X11 display or it has no XTEST extension\n");return 2;}
+ if(!backend.ready()){qCCritical(lcEmbed(),"agino-keyboard-embed: cannot open the X11 display or it has no XTEST extension");return 2;}
+ qCInfo(lcEmbed(),"agino-keyboard-embed: started for the session program with pid %d",int(parent));
  KeySender keys(backend);
  const auto keyConnection=QObject::connect(&state,&KeyboardState::keyRequested,&app,[&keys](KeySpec k,bool release){keys.send(k,release);});
  // The clock only serves the repeat of a held backspace: it runs while one is held.
@@ -204,6 +207,7 @@ int main(int argc,char **argv){
  QSocketNotifier input(STDIN_FILENO,QSocketNotifier::Read);input.setEnabled(!inputReopened);
  QObject::connect(&input,&QSocketNotifier::activated,&app,[&app]{char buffer[64];const ssize_t n=read(STDIN_FILENO,buffer,sizeof(buffer));if(n==0||(n<0&&errno!=EAGAIN&&errno!=EINTR))app.quit();});
  const int result=app.exec();
+ qCInfo(lcEmbed(),"agino-keyboard-embed: leaving the event loop (exit code %d)",result);
  // The sender goes first when the variables are destroyed: nothing may reach it after this.
  QObject::disconnect(keyConnection);
  keys.releaseAll();
