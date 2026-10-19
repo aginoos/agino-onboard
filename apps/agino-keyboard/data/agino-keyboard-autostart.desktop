@@ -14,7 +14,9 @@ Name[uk]=Екранна клавіатура Agino
 Name[zh_CN]=Agino 屏幕键盘
 Name[zh_TW]=Agino 螢幕鍵盤
 Name[zh_HK]=Agino 螢幕鍵盤
-Exec=agino-keyboard --hidden
+# A transient user service: the session does not start the program again when it crashes, the service does (a clean
+# exit, for example Quit in the tray menu, is not restarted; a second login finds the unit gone).
+Exec=systemd-run --user --collect --quiet --unit=agino-keyboard -p Restart=on-failure -p RestartSec=2 /usr/bin/agino-keyboard --hidden
 Icon=agino-keyboard
 OnlyShowIn=Deepin;DDE;
 X-GNOME-Autostart-enabled=true
