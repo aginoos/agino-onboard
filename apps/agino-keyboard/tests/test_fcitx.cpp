@@ -359,10 +359,10 @@ private slots:
  void currentInputMethodStatusFollowsFcitxWithoutOpeningSettings(){
   FcitxClient client;QLineEdit target;focusTarget(target,client);QTRY_VERIFY(client.inputMethods().contains("pinyin"));
   client.setInputMethod("pinyin");QTRY_COMPARE(client.inputMethod(),QString("pinyin"));
-  QTRY_VERIFY(client.property("inputMethodStatus").toString().startsWith(QString::fromUtf8("中文：")));
+  QTRY_VERIFY(client.property("inputMethodStatus").toString().startsWith(QString::fromUtf8("Chinese: ")));
   QVERIFY(!client.property("inputMethodStatus").toString().contains("pinyin"));
   client.setInputMethod("keyboard-us");QTRY_COMPARE(client.inputMethod(),QString("keyboard-us"));
-  QTRY_VERIFY(client.property("inputMethodStatus").toString().startsWith(QString::fromUtf8("英文：")));
+  QTRY_VERIFY(client.property("inputMethodStatus").toString().startsWith(QString::fromUtf8("English: ")));
   QVERIFY(!client.property("inputMethodStatus").toString().contains("keyboard-us"));
  }
  void inlineSettingsPreserveCompositionAndReuseProcess(){

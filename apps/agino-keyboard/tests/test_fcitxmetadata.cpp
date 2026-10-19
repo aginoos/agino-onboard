@@ -62,16 +62,16 @@ private slots:
   QFETCH(bool,malformed);service.malformed=malformed;service.calls=0;service.failures=1;service.current="pinyin";
   FcitxClient client;QTRY_VERIFY(client.editable());
   // No policy change, Settings call or new snapshot should be needed to recover.
-  QTRY_VERIFY_WITH_TIMEOUT(client.inputMethodStatus()==QString::fromUtf8("中文：拼音"),3000);
+  QTRY_VERIFY_WITH_TIMEOUT(client.inputMethodStatus()==QString::fromUtf8("Chinese: 拼音"),3000);
   QVERIFY(service.calls>=2);QCOMPARE(client.inputMethodNames().size(),2);
   QCOMPARE(client.property("inputLanguageCode").toString(),QString("CN"));
-  service.changeInputMethod("keyboard-us");QTRY_COMPARE(client.inputMethodStatus(),QString::fromUtf8("英文：Keyboard - English (US)"));QCOMPARE(client.property("inputLanguageCode").toString(),QString("EN"));
+  service.changeInputMethod("keyboard-us");QTRY_COMPARE(client.inputMethodStatus(),QString::fromUtf8("English: Keyboard - English (US)"));QCOMPARE(client.property("inputLanguageCode").toString(),QString("EN"));
  }
  void persistentFailureStopsRetryingAndManualRefreshCanRecover(){
   service.malformed=false;service.calls=0;service.failures=1000;service.current="pinyin";
   FcitxClient client;QTRY_VERIFY(client.editable());QTRY_COMPARE_WITH_TIMEOUT(service.calls,4,5000);
-  QTest::qWait(1000);QCOMPARE(service.calls,4);QCOMPARE(client.inputMethodStatus(),QString::fromUtf8("输入法状态暂不可用"));
-  service.failures=service.calls+1;client.refreshInputMethodNames();QTRY_COMPARE(client.inputMethodStatus(),QString::fromUtf8("中文：拼音"));QVERIFY(service.calls>=6);service.extended=true;client.refreshInputMethodNames();QTRY_COMPARE(client.inputMethods().size(),5);QTRY_COMPARE(client.inputMethodNames().size(),5);
+  QTest::qWait(1000);QCOMPARE(service.calls,4);QCOMPARE(client.inputMethodStatus(),QString::fromUtf8("Input method status unavailable"));
+  service.failures=service.calls+1;client.refreshInputMethodNames();QTRY_COMPARE(client.inputMethodStatus(),QString::fromUtf8("Chinese: 拼音"));QVERIFY(service.calls>=6);service.extended=true;client.refreshInputMethodNames();QTRY_COMPARE(client.inputMethods().size(),5);QTRY_COMPARE(client.inputMethodNames().size(),5);
  }
  void languageAbbreviationsFollowMetadata(){
   service.extended=true;service.malformed=false;service.calls=0;service.failures=0;service.current="keyboard-jp";

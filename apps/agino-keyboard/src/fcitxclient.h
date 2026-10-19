@@ -27,7 +27,7 @@ public:
  quint64 contextEpoch()const{return context_;}quint64 candidateEpoch()const{return candidate_;}
  QString preedit()const{return preedit_;}QStringList candidates()const{return candidates_;}QString inputMethod()const{return im_;}QStringList inputMethods()const{return ims_;}bool hasNext()const{return next_;}bool hasPrev()const{return prev_;}bool paging()const{return paging_;}QString status()const{return status_;}
  QVariantMap inputMethodNames()const{return imNames_;}
- QString inputMethodStatus()const{if(standalone_)return QString();if(sensitive())return tr("安全输入");const auto text=imStatuses_.value(im_).toString();return !text.isEmpty()?text:im_.isEmpty()?status_:namesRetries_>=3&&!namesInFlight_&&!namesRetryTimer_.isActive()?tr("输入法状态暂不可用"):tr("正在读取输入法状态");}
+ QString inputMethodStatus()const{if(standalone_)return QString();if(sensitive())return tr("Secure input");const auto text=imStatuses_.value(im_).toString();return !text.isEmpty()?text:im_.isEmpty()?status_:namesRetries_>=3&&!namesInFlight_&&!namesRetryTimer_.isActive()?tr("Input method status unavailable"):tr("Reading the input method status");}
  QString inputLanguageCode()const{return imLanguages_.value(im_).toString();}
  void refreshInputMethodNames();
  bool sendKey(KeySpec,bool,quint64);

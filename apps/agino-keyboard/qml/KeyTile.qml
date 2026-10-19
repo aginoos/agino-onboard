@@ -30,7 +30,7 @@ Item {
   let plain="`1234567890-=[]\\;',./",shift="~!@#$%^&*()_+{}|:\"<>?";let n=plain.indexOf(String.fromCharCode(sym));return sym<128&&n>=0?shift[n]:""
  }
  Accessible.role:Accessible.Button
- Accessible.name:actionName==="Language"?"切换输入法":actionName==="Settings"?"设置":actionName==="Hide"?"收起屏幕键盘":sym===0xff08?"退格":lockedShift?"Shift（大写锁定）":label
+ Accessible.name:actionName==="Language"?qsTranslate("Keyboard","Switch input method"):actionName==="Settings"?qsTranslate("Keyboard","Settings"):actionName==="Hide"?qsTranslate("Keyboard","Hide screen keyboard"):sym===0xff08?qsTranslate("Keyboard","Backspace"):lockedShift?qsTranslate("Keyboard","Shift (Caps Lock)"):label
  Accessible.ignored:panel&&(panel.settingsOpen||panel.expanded)
  Accessible.checkable:sym===0xffe1||sym===0xffe2
  Accessible.checked:shiftActive

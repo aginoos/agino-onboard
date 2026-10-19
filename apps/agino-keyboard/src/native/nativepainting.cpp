@@ -209,7 +209,7 @@ QVector<NativeKey> NativePainting::keys(QSizeF size,bool compact,bool functionRo
     row.append(entry(QStringLiteral(","),44)); row.append(entry(QStringLiteral("."),46)); row.append(entry(QStringLiteral("/"),47));
     row.append(entry(QStringLiteral("Shift"),0xffe2,2.5,QStringLiteral("Shift-R"))); rows.append(row);
     rows.append({entry(QStringLiteral("Ctrl"),0xffe3,1.5,QStringLiteral("Ctrl-L")),entry(QStringLiteral("Super"),0xffeb),
-                 entry(QStringLiteral("Alt"),0xffe9,1,QStringLiteral("Alt-L")),entry(QStringLiteral("空格"),32,7.5,QStringLiteral("Space")),
+                 entry(QStringLiteral("Alt"),0xffe9,1,QStringLiteral("Alt-L")),entry(QCoreApplication::translate("Keyboard","Space"),32,7.5,QStringLiteral("Space")),
                  entry(QStringLiteral("Alt"),0xffea,1,QStringLiteral("Alt-R")),entry(QStringLiteral("Ctrl"),0xffe4,2,QStringLiteral("Ctrl-R")),
                  entry(QStringLiteral("⌄"),0,1,QStringLiteral("Hide"))});
     const qreal margin=compact?8:12,gap=compact?2:6,rowGap=compact?2:8,height=compact?32:48;
@@ -223,9 +223,9 @@ QVector<NativeKey> NativePainting::keys(QSizeF size,bool compact,bool functionRo
             key.label=k.label; key.secondary=shifted(k.sym);
             if(k.name==QStringLiteral("Language")||k.name==QStringLiteral("Hide")) key.action=k.name;
             key.control.id=QStringLiteral("key-")+k.name;
-            key.control.name=k.name==QStringLiteral("Language")?QStringLiteral("切换输入法"):
-                k.name==QStringLiteral("Hide")?QStringLiteral("收起屏幕键盘"):
-                k.sym==0xff08?QStringLiteral("退格"):k.label;
+            key.control.name=k.name==QStringLiteral("Language")?QCoreApplication::translate("Keyboard","Switch input method"):
+                k.name==QStringLiteral("Hide")?QCoreApplication::translate("Keyboard","Hide screen keyboard"):
+                k.sym==0xff08?QCoreApplication::translate("Keyboard","Backspace"):k.label;
             key.control.action=key.action;
             key.control.sym=k.sym;
             key.control.checkable=k.sym==0xffe1||k.sym==0xffe2;

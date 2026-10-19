@@ -81,7 +81,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
  updateIcon();qreal is=compact?18:24;p.save();p.setRenderHint(QPainter::Antialiasing,false);p.setRenderHint(QPainter::SmoothPixmapTransform,true);p.drawImage(QRectF(bx+4,(ch-is)/2,is,is),icon_);p.restore();
  const bool hasWords=!words_.isEmpty()&&!input_.sensitive();
  QRectF toolbarAction(bx+bw-ch,0,ch,ch);
- NativeControl action;action.id=hasWords?"expandButton":"settingsButton";action.name=hasWords?(expanded_?QStringLiteral("收起候选词"):QStringLiteral("展开候选词")):QStringLiteral("设置");action.action=hasWords?"expand":"settings";action.rect=toolbarAction;action.checked=expanded_;action.enabled=dragOwner_==NoOwner;addControl(action);
+ NativeControl action;action.id=hasWords?"expandButton":"settingsButton";action.name=hasWords?(expanded_?QCoreApplication::translate("Keyboard","Collapse candidates"):QCoreApplication::translate("Keyboard","Expand candidates")):QCoreApplication::translate("Keyboard","Settings");action.action=hasWords?"expand":"settings";action.rect=toolbarAction;action.checked=expanded_;action.enabled=dragOwner_==NoOwner;addControl(action);
  if(hasWords){
   if(expanded_){bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==action.id&&!contact.moving;const int lightness=held?-10:(hovered_==action.id?10:0);const QColor checked=DGuiApplicationHelper::adjustColor(pal.highlight().color(),0,0,lightness,0,0,0,0);NativePainting::rectangle(p,toolbarAction,checked,8);}
   qreal scale=(!expanded_&&hovered_==action.id)?1.1:1;
@@ -101,9 +101,9 @@ void NativePanel::render(QPainter &p,QSizeF sz){
    if(r.intersects(clip)){NativePainting::text(p,r,words_[index],font,pal.windowText().color());NativeControl c;c.id=QString("candidate-%1-%2-%3").arg(candidateContext_).arg(candidateGeneration_).arg(index);c.name=words_[index];c.rect=r.intersected(clip);c.action="candidate";c.index=index;c.context=candidateContext_;c.generation=candidateGeneration_;c.enabled=dragOwner_==NoOwner;addControl(c);}x+=width+gap;
   }
   p.restore();
-  NativeControl list;list.id="candidate-list";list.name=QStringLiteral("候选词");list.action="scroll/candidates";list.role=QAccessible::List;list.context=candidateContext_;list.generation=candidateGeneration_;list.rect=clip;list.enabled=dragOwner_==NoOwner;addControl(list);
+  NativeControl list;list.id="candidate-list";list.name=QCoreApplication::translate("Keyboard","Candidates");list.action="scroll/candidates";list.role=QAccessible::List;list.context=candidateContext_;list.generation=candidateGeneration_;list.rect=clip;list.enabled=dragOwner_==NoOwner;addControl(list);
  }else{
-  const QString label=compact?(input_.sensitive()?QStringLiteral("锁"):input_.inputLanguageCode().isEmpty()?QStringLiteral("—"):input_.inputLanguageCode()):input_.inputMethodStatus();QFont font=pixels(st.font,compact?13:14);qreal width=qMin(qreal(qCeil(NativePainting::textSize(label,font).width())),bw*.35);
+  const QString label=compact?(input_.sensitive()?QCoreApplication::translate("Keyboard","Lock"):input_.inputLanguageCode().isEmpty()?QStringLiteral("—"):input_.inputLanguageCode()):input_.inputMethodStatus();QFont font=pixels(st.font,compact?13:14);qreal width=qMin(qreal(qCeil(NativePainting::textSize(label,font).width())),bw*.35);
   p.save();p.setOpacity(opacity*.75);NativePainting::text(p,QRectF(toolbarAction.x()-6-width,0,width,ch),label,font,pal.windowText().color(),Qt::AlignRight|Qt::AlignVCenter,false,true,true);p.restore();
   bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==action.id&&!contact.moving;
   if(held){p.save();p.setOpacity(opacity*.12);p.setPen(Qt::NoPen);p.setBrush(pal.highlight());p.drawRoundedRect(toolbarAction,compact?3:7,compact?3:7);p.restore();}
@@ -113,7 +113,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
   const auto keys=NativePainting::keys(sz,compact,functionRow_);
   for(auto key:keys){bool held=false;for(const auto &contact:contacts_)held|=contact.control.id==key.control.id&&!contact.moving&&!contact.alternative;
    bool enabled=!expanded_&&(input_.editable()||!key.action.isEmpty()||key.control.id=="key-Space");NativePainting::key(p,key,st,state_.modifiers(),held,enabled,key.control.id=="key-Space"?input_.status():QString());
-   key.control.enabled=enabled&&dragOwner_==NoOwner;key.control.pressed=held||((key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3));key.control.checked=(key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3);key.control.checkable=key.control.sym==0xffe1||key.control.sym==0xffe2;if(key.control.checked&&(state_.modifiers()&2))key.control.name=QStringLiteral("Shift（大写锁定）");if(!expanded_)addControl(key.control);
+   key.control.enabled=enabled&&dragOwner_==NoOwner;key.control.pressed=held||((key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3));key.control.checked=(key.control.sym==0xffe1||key.control.sym==0xffe2)&&(state_.modifiers()&3);key.control.checkable=key.control.sym==0xffe1||key.control.sym==0xffe2;if(key.control.checked&&(state_.modifiers()&2))key.control.name=QCoreApplication::translate("Keyboard","Shift (Caps Lock)");if(!expanded_)addControl(key.control);
   }
  }
  if(expanded_){
@@ -124,7 +124,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
     NativeControl c;c.id=QString("expandedCandidate-%1-%2-%3").arg(candidateContext_).arg(candidateGeneration_).arg(value["index"].toInt());c.name=value["text"].toString();c.action="candidate";c.index=value["index"].toInt();c.rect=r.intersected(clip);c.context=candidateContext_;c.generation=candidateGeneration_;addControl(c);
    }y+=rowHeight+8;
   }
-  p.restore();expandedContent_=candidateRows_.contentHeight();expandedOffset_=qBound(0.,expandedOffset_,qMax(0.,expandedContent_-clip.height()));NativeControl list;list.id="candidate-flow";list.name=QStringLiteral("更多候选词");list.action="scroll/expanded";list.role=QAccessible::List;list.context=candidateContext_;list.generation=candidateGeneration_;list.rect=clip;addControl(list);
+  p.restore();expandedContent_=candidateRows_.contentHeight();expandedOffset_=qBound(0.,expandedOffset_,qMax(0.,expandedContent_-clip.height()));NativeControl list;list.id="candidate-flow";list.name=QCoreApplication::translate("Keyboard","More candidates");list.action="scroll/expanded";list.role=QAccessible::List;list.context=candidateContext_;list.generation=candidateGeneration_;list.rect=clip;addControl(list);
  }
  if(!alternatives_.isEmpty()){
   p.setPen(Qt::NoPen);p.setBrush(pal.highlight());NativePainting::rectangle(p,alternativeRect_,pal.highlight().color(),8);
@@ -238,7 +238,7 @@ QVector<NativeControl> NativePanel::accessibleControls()const{
   if(c.action=="settings/opacity"){auto value=c.value.toMap();value["current"]=prefs_.opacityPercent();c.value=value;}
   if(c.action=="alternative"&&(alternatives_.isEmpty()||c.generation!=alternativeGeneration_||c.context!=input_.contextEpoch()||c.index<0||c.index>=alternatives_.size()||c.value.toString()!=alternatives_[c.index]))continue;
   if(c.action=="expand"&&(words_.isEmpty()||input_.sensitive()))continue;
-  if(c.action=="expand"){c.checked=expanded_;c.name=expanded_?QStringLiteral("收起候选词"):QStringLiteral("展开候选词");}
+  if(c.action=="expand"){c.checked=expanded_;c.name=expanded_?QCoreApplication::translate("Keyboard","Collapse candidates"):QCoreApplication::translate("Keyboard","Expand candidates");}
   if(c.action=="settings"&&!words_.isEmpty()&&!input_.sensitive())continue;
   c.enabled=c.enabled&&dragOwner_==NoOwner;
   if(c.action=="candidate"||c.action.startsWith("scroll/"))c.enabled=c.enabled&&c.context==input_.contextEpoch()&&c.generation==input_.candidateEpoch()&&!input_.sensitive();

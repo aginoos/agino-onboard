@@ -77,14 +77,14 @@ QVector<NativeControl> NativeSettings::paint(QPainter &p,QSizeF size,const Nativ
  auto label=[&](QRectF r,const QString &s,int pixels,QColor color,Qt::Alignment alignment=Qt::AlignVCenter|Qt::AlignLeft,bool elide=false,bool bold=false,bool anchored=false,qreal opacity=1){p.save();p.setOpacity(p.opacity()*opacity);auto f=style.font;f.setPixelSize(pixels);f.setWeight(bold?QFont::DemiBold:QFont::Normal);NativePainting::text(p,r,s,f,QColor::fromRgba(color.rgba()),alignment,false,elide,!anchored);p.restore();};
  QRectF viewport(0,0,size.width(),size.height());
  auto control=[&](const QString &id,const QString &name,QRectF rect,QAccessible::Role role=QAccessible::Button,QVariant value=QVariant(),bool checked=false,bool enabled=true,bool checkable=false){NativeControl c;c.id="settings/"+id;c.action=id;c.name=name;c.rect=rect.intersected(viewport);c.role=role;c.value=value;c.checked=checked;c.enabled=enabled;c.checkable=checkable;c.generation=d->generation;c.pressed=pressed==c.id;if(!c.rect.isEmpty())d->controls.append(c);return c;};
- auto button=[&](const QString &id,const QString &name,QRectF r,int pixels,bool checked=false,bool enabled=true,bool emphasized=false){auto c=control(id,name,r,QAccessible::Button,{},checked,enabled,checked||id.startsWith("modifier/")||id.startsWith("trigger/"));p.save();if(!enabled)p.setOpacity(p.opacity()*.45);QRectF bg=r;if(emphasized)bg.setTop(r.center().y()-16),bg.setHeight(32);rounded(bg,6,emphasized?QColor(Qt::transparent):style.palette.color(QPalette::Button),emphasized?QColor():alpha(ink,.08));if(c.pressed||checked||emphasized)shade(bg,6,accent,c.pressed?.2:.12);label(r,name,pixels,(checked||emphasized)?accent:ink,Qt::AlignCenter);p.restore();};
+ auto button=[&](const QString &id,const QString &name,QRectF r,int pixels,bool checked=false,bool enabled=true,bool emphasized=false){auto c=control(id,name,r,QAccessible::Button,{},checked,enabled,checked||id.startsWith("modifier/")||id.startsWith("trigger/"));p.save();if(!enabled)p.setOpacity(p.opacity()*.45);QRectF bg=r;if(emphasized)bg.setTop(r.center().y()-16),bg.setHeight(32);rounded(bg,6,emphasized?QColor(Qt::transparent):style.palette.color(QPalette::Button),emphasized?QColor():alpha(ink,.08));if(c.pressed||checked||emphasized)shade(bg,6,accent,c.pressed?.2:.12);label(r,name,pixels,(checked||emphasized)?accent:ink,Qt::AlignCenter,true);p.restore();};
  p.save();rounded(QRectF(QPointF(0,0),size),compact?8:12,style.palette.color(QPalette::Window));
  if(!d->picker.isEmpty()){
   // The QML picker is a second rounded Rectangle over the settings panel.
   rounded(QRectF(QPointF(0,0),size),compact?8:12,style.palette.color(QPalette::Window));
   const bool shortcut=d->picker=="shortcut";
-  label({16,0,size.width()-160,48},shortcut?QStringLiteral("呼出快捷键"):d->picker=="input"?QStringLiteral("默认输入法"):QStringLiteral("显示屏幕"),compact?13:16,ink,Qt::AlignVCenter|Qt::AlignLeft,false,true,true);
-  button("cancelPicker","‹  返回设置",{size.width()-128,0,112,48},13,false,true,true);
+  label({16,0,size.width()-160,48},shortcut?QCoreApplication::translate("Keyboard","Activation shortcut"):d->picker=="input"?QCoreApplication::translate("Keyboard","Default input method"):QCoreApplication::translate("Keyboard","Show on screen"),compact?13:16,ink,Qt::AlignVCenter|Qt::AlignLeft,false,true,true);
+  button("cancelPicker",(QStringLiteral("‹  ")+QCoreApplication::translate("Keyboard","Back to settings")),{size.width()-128,0,112,48},13,false,true,true);
   viewport=shortcut?QRectF(16,52,size.width()-32,qMax(qreal(0),size.height()-64)):QRectF(12,56,size.width()-24,qMax(qreal(0),size.height()-68));
   const int columns=compact?12:16;const qreal contentHeight=shortcut?48+std::ceil(48.0/columns)*46+48:(d->picker=="input"?d->input.inputMethods().size():screens.size()+1)*48;
   d->maximum=qMax(qreal(0),contentHeight-viewport.height());d->offset=qBound(qreal(0),d->offset,d->maximum);
@@ -95,42 +95,42 @@ QVector<NativeControl> NativeSettings::paint(QPainter &p,QSizeF size,const Nativ
    const qreal w=(viewport.width()-(columns-1)*2)/columns;for(int n=0;n<triggers.size();++n)button("trigger/"+triggers[n],triggers[n],{viewport.x()+(n%columns)*(w+2),top+48+(n/columns)*46,w,44},11,d->trigger==triggers[n]);
    QStringList chosen;for(const auto &m:mods)if(d->modifiers.contains(m))chosen<<m;chosen<<d->trigger;
    label({viewport.x()+4,top+contentHeight-44,viewport.width()-120,40},chosen.join('+'),13,ink);
-   button("saveShortcut","保存快捷键",{viewport.right()-112,top+contentHeight-44,112,44},13,false,!d->modifiers.isEmpty());
+   button("saveShortcut",QCoreApplication::translate("Keyboard","Save shortcut"),{viewport.right()-112,top+contentHeight-44,112,44},13,false,!d->modifiers.isEmpty());
   }else{
    const bool input=d->picker=="input";const auto ids=d->input.inputMethods();const int count=input?ids.size():screens.size()+1;
    for(int n=0;n<count;++n){const QString identity=input?"input:"+ids[n]:n==0?QStringLiteral("screen:follow"):"screen:"+QString::number(n-1)+":"+screens[n-1];
-    const QVariant value=input?QVariant(ids[n]):QVariant(n-1);const QString name=input?d->imName(ids[n]):n==0?QStringLiteral("跟随输入窗口"):screens[n-1];
+    const QVariant value=input?QVariant(ids[n]):QVariant(n-1);const QString name=input?d->imName(ids[n]):n==0?QCoreApplication::translate("Keyboard","Follow the input window"):screens[n-1];
     const bool selected=input?ids[n]==(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm()):n-1==d->prefs.screenIndex();
     QRectF r(viewport.x(),top+n*48,viewport.width(),48);auto c=control("choice/"+identity,name,r,QAccessible::RadioButton,value,selected,true,true);
     if(selected){shade(r.adjusted(2,2,-2,-2),7,highlight,.12);}
     label(r.adjusted(16,0,-16,0),name,13,selected?accent:ink,Qt::AlignVCenter|Qt::AlignLeft,false,false,true);
    }
   }
-  control("picker-scroll",QStringLiteral("当前picker列表"),viewport,QAccessible::List);
+  control("picker-scroll",QCoreApplication::translate("Keyboard","Current list"),viewport,QAccessible::List);
   p.restore();p.restore();for(auto &c:d->controls)c.rect.translate(1,1);d->slider.translate(1,1);return d->controls;
  }
  const qreal rh=compact?28:48,hh=compact?32:48,section=compact?20:28,margin=compact?8:12,gap=margin;
- label({16,0,26,hh},QStringLiteral("⚙"),20,ink,Qt::AlignVCenter|Qt::AlignLeft,false,false,true,.6);label({46,0,size.width()-182,hh},QStringLiteral("键盘设置"),compact?13:16,ink,Qt::AlignVCenter|Qt::AlignLeft,false,true,true);
- button("returnKeyboard","‹  返回键盘",{size.width()-124,0,112,hh},compact?11:13,false,true,true);
+ label({16,0,26,hh},QStringLiteral("⚙"),20,ink,Qt::AlignVCenter|Qt::AlignLeft,false,false,true,.6);label({46,0,size.width()-182,hh},QCoreApplication::translate("Keyboard","Keyboard Settings"),compact?13:16,ink,Qt::AlignVCenter|Qt::AlignLeft,false,true,true);
+ button("returnKeyboard",(QStringLiteral("‹  ")+QCoreApplication::translate("Keyboard","Back to keyboard")),{size.width()-124,0,112,hh},compact?11:13,false,true,true);
  const qreal cw=(size.width()-2*margin-gap)/2,y=hh+(compact?4:8);
  auto row=[&](int column,int n,const QString &title,const QString &subtitle,qreal controlWidth){const qreal x=margin+column*(cw+gap),ry=y+section+n*rh;QRectF r(x,ry,cw,rh);label({x+(compact?8:12),ry+(!compact&&!subtitle.isEmpty()?7:0),cw-controlWidth-(compact?20:30),!compact&&!subtitle.isEmpty()?20:rh},title,compact?11:13,ink,Qt::AlignVCenter|Qt::AlignLeft,true);if(!compact&&!subtitle.isEmpty())label({x+12,ry+27,cw-controlWidth-30,16},subtitle,10,ink,Qt::AlignTop|Qt::AlignLeft,true,false,false,.55);if(n<4){rounded(QRectF(x+12,ry+rh-1,cw-24,1),0,faded(ink,.07));}return QRectF(r.right()-(compact?8:12)-controlWidth,ry,controlWidth,rh);};
- for(int col=0;col<2;++col){QRectF r(margin+col*(cw+gap),y,cw,section+5*rh);rounded(r,9,style.palette.color(QPalette::Base),alpha(ink,.08));label({r.x()+(compact?8:12),y,cw-24,section},col==0?QStringLiteral("输入与呼出"):QStringLiteral("外观与显示"),11,ink,Qt::AlignVCenter|Qt::AlignLeft,false,false,false,.6);}
- auto segments=[&](QRectF r,const QString &id,const QStringList &items,int selected){rounded({r.x(),r.center().y()-qMin(qreal(32),rh-4)/2,r.width(),qMin(qreal(32),rh-4)},6,alpha(ink,.04));const qreal w=r.width()/items.size();for(int n=0;n<items.size();++n){QRectF s(r.x()+n*w,r.y(),w,r.height());auto c=control(id+"/"+QString::number(n),items[n],s,QAccessible::RadioButton,n,n==selected,true,true);if(n==selected)shade({s.x()+2,s.center().y()-qMin(qreal(28),rh-6)/2,w-4,qMin(qreal(28),rh-6)},5,highlight,.12);label(s,items[n],compact?11:12,n==selected?accent:ink,Qt::AlignCenter,false,false,true);}};
+ for(int col=0;col<2;++col){QRectF r(margin+col*(cw+gap),y,cw,section+5*rh);rounded(r,9,style.palette.color(QPalette::Base),alpha(ink,.08));label({r.x()+(compact?8:12),y,cw-24,section},col==0?QCoreApplication::translate("Keyboard","Input and Activation"):QCoreApplication::translate("Keyboard","Appearance and Display"),11,ink,Qt::AlignVCenter|Qt::AlignLeft,false,false,false,.6);}
+ auto segments=[&](QRectF r,const QString &id,const QStringList &items,int selected){rounded({r.x(),r.center().y()-qMin(qreal(32),rh-4)/2,r.width(),qMin(qreal(32),rh-4)},6,alpha(ink,.04));const qreal w=r.width()/items.size();for(int n=0;n<items.size();++n){QRectF s(r.x()+n*w,r.y(),w,r.height());auto c=control(id+"/"+QString::number(n),items[n],s,QAccessible::RadioButton,n,n==selected,true,true);if(n==selected)shade({s.x()+2,s.center().y()-qMin(qreal(28),rh-6)/2,w-4,qMin(qreal(28),rh-6)},5,highlight,.12);label(s,items[n],compact?11:12,n==selected?accent:ink,Qt::AlignCenter,true,false,true);}};
  auto choice=[&](QRectF r,const QString &id,const QString &name){auto c=control(id,name,r);rounded({r.x(),r.center().y()-qMin(qreal(32),rh-4)/2,r.width(),qMin(qreal(32),rh-4)},6,QColor(Qt::transparent),alpha(ink,.12));label(r.adjusted(10,0,-35,0),name,compact?11:12,ink,Qt::AlignVCenter|Qt::AlignLeft,true);paintChoiceChevron(p,r,ink);};
  auto toggle=[&](QRectF r,const QString &id,const QString &name,bool checked){auto c=control(id,name,r,QAccessible::CheckBox,checked,checked,true,true);QRectF track(r.center().x()-18,r.center().y()-10,36,20);rounded(track,10,checked?highlight:alpha(ink,.22));rounded({track.x()+(checked?18:2),track.y()+2,16,16},8,Qt::white);};
  const qreal width=compact?130:180;
- segments(row(0,0,"呼出方式",{},width),"modeSetting",{"自动","手动","关闭"},d->prefs.mode());
- auto im=d->imName(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm());choice(row(0,1,"默认输入法",{},width),"inputSetting",im.isEmpty()?QStringLiteral("请选择"):im);
- toggle(row(0,2,"安全输入","关闭候选词与词库学习",52),"safeSetting","安全输入",d->prefs.safeInput());
- choice(row(0,3,"呼出快捷键",{},width),"shortcutSetting",d->prefs.shortcut());
- toggle(row(0,4,"按键声音",{},52),"soundSetting","按键声音",d->prefs.keySound());
- segments(row(1,0,"布局模式",{},width),"layoutSetting",{"标准","紧凑"},d->prefs.compact()?1:0);
- toggle(row(1,1,"显示功能键行","F1–F12",52),"functionSetting","显示功能键行",d->prefs.functionRow());
- const int screen=d->prefs.screenIndex();choice(row(1,2,"显示屏幕",{},width),"screenSetting",screen>=0&&screen<screens.size()?screens[screen]:QStringLiteral("跟随输入窗口"));
- segments(row(1,3,"主题",{},width),"themeSetting",{"系统","浅色","深色"},d->prefs.theme());
- auto opacity=row(1,4,"不透明度",{},width);d->slider={opacity.x(),opacity.y(),opacity.width()-36,opacity.height()};
- if(d->transparency){control("opacitySetting","屏幕键盘不透明度",d->slider,QAccessible::Slider,QVariantMap{{"current",d->prefs.opacityPercent()},{"minimum",50},{"maximum",100},{"step",1}});if(!d->controls.isEmpty())d->controls.last().action="settings/opacity";const qreal fraction=(d->prefs.opacityPercent()-50)/50.0;QRectF track(d->slider.x()+6,d->slider.center().y()-1.5,d->slider.width()-12,3);rounded(track,2,alpha(ink,.15));rounded({track.x(),track.y(),track.width()*fraction,3},2,highlight);rounded({d->slider.x()+6+fraction*(d->slider.width()-24),d->slider.center().y()-6,12,12},6,highlight);}
- label({opacity.x(),opacity.y(),opacity.width(),rh},d->transparency?QString::number(d->prefs.opacityPercent())+"%":QStringLiteral("需要桌面合成"),compact?10:12,ink,Qt::AlignVCenter|Qt::AlignRight,false,false,false,.7);
+ segments(row(0,0,QCoreApplication::translate("Keyboard","Activation mode"),{},width),"modeSetting",{QCoreApplication::translate("Keyboard","Auto"),QCoreApplication::translate("Keyboard","Manual"),QCoreApplication::translate("Keyboard","Off")},d->prefs.mode());
+ auto im=d->imName(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm());choice(row(0,1,QCoreApplication::translate("Keyboard","Default input method"),{},width),"inputSetting",im.isEmpty()?QCoreApplication::translate("Keyboard","Select"):im);
+ toggle(row(0,2,QCoreApplication::translate("Keyboard","Secure input"),QCoreApplication::translate("Keyboard","Turns off candidates and dictionary learning"),52),"safeSetting",QCoreApplication::translate("Keyboard","Secure input"),d->prefs.safeInput());
+ choice(row(0,3,QCoreApplication::translate("Keyboard","Activation shortcut"),{},width),"shortcutSetting",d->prefs.shortcut());
+ toggle(row(0,4,QCoreApplication::translate("Keyboard","Key sound"),{},52),"soundSetting",QCoreApplication::translate("Keyboard","Key sound"),d->prefs.keySound());
+ segments(row(1,0,QCoreApplication::translate("Keyboard","Layout"),{},width),"layoutSetting",{QCoreApplication::translate("Keyboard","Standard"),QCoreApplication::translate("Keyboard","Compact")},d->prefs.compact()?1:0);
+ toggle(row(1,1,QCoreApplication::translate("Keyboard","Show function key row"),"F1–F12",52),"functionSetting",QCoreApplication::translate("Keyboard","Show function key row"),d->prefs.functionRow());
+ const int screen=d->prefs.screenIndex();choice(row(1,2,QCoreApplication::translate("Keyboard","Show on screen"),{},width),"screenSetting",screen>=0&&screen<screens.size()?screens[screen]:QCoreApplication::translate("Keyboard","Follow the input window"));
+ segments(row(1,3,QCoreApplication::translate("Keyboard","Theme"),{},width),"themeSetting",{QCoreApplication::translate("Keyboard","System"),QCoreApplication::translate("Keyboard","Light"),QCoreApplication::translate("Keyboard","Dark")},d->prefs.theme());
+ auto opacity=row(1,4,QCoreApplication::translate("Keyboard","Opacity"),{},width);d->slider={opacity.x(),opacity.y(),opacity.width()-36,opacity.height()};
+ if(d->transparency){control("opacitySetting",QCoreApplication::translate("Keyboard","Screen keyboard opacity"),d->slider,QAccessible::Slider,QVariantMap{{"current",d->prefs.opacityPercent()},{"minimum",50},{"maximum",100},{"step",1}});if(!d->controls.isEmpty())d->controls.last().action="settings/opacity";const qreal fraction=(d->prefs.opacityPercent()-50)/50.0;QRectF track(d->slider.x()+6,d->slider.center().y()-1.5,d->slider.width()-12,3);rounded(track,2,alpha(ink,.15));rounded({track.x(),track.y(),track.width()*fraction,3},2,highlight);rounded({d->slider.x()+6+fraction*(d->slider.width()-24),d->slider.center().y()-6,12,12},6,highlight);}
+ label({opacity.x(),opacity.y(),opacity.width(),rh},d->transparency?QString::number(d->prefs.opacityPercent())+"%":QCoreApplication::translate("Keyboard","Requires desktop compositing"),compact?10:12,ink,Qt::AlignVCenter|Qt::AlignRight,false,false,false,.7);
  p.restore();p.restore();for(auto &c:d->controls)c.rect.translate(1,1);d->slider.translate(1,1);return d->controls;
 }
 
@@ -144,9 +144,9 @@ bool NativeSettings::currentControl(NativeControl &c)const{
  else if(id.startsWith("layoutSetting/"))c.checked=c.value.toInt()==int(d->prefs.compact());
  else if(id.startsWith("themeSetting/"))c.checked=c.value.toInt()==d->prefs.theme();
  else if(id=="settings/opacity"){auto value=c.value.toMap();value["current"]=d->prefs.opacityPercent();c.value=value;}
- else if(id=="inputSetting"){c.name=d->imName(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm());if(c.name.isEmpty())c.name=QStringLiteral("请选择");}
+ else if(id=="inputSetting"){c.name=d->imName(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm());if(c.name.isEmpty())c.name=QCoreApplication::translate("Keyboard","Select");}
  else if(id=="shortcutSetting")c.name=d->prefs.shortcut();
- else if(id=="screenSetting"){const int screen=d->prefs.screenIndex();c.name=screen>=0&&screen<d->screens.size()?d->screens[screen]:QStringLiteral("跟随输入窗口");}
+ else if(id=="screenSetting"){const int screen=d->prefs.screenIndex();c.name=screen>=0&&screen<d->screens.size()?d->screens[screen]:QCoreApplication::translate("Keyboard","Follow the input window");}
  else if(id.startsWith("choice/input:")){c.name=d->imName(c.value.toString());c.checked=c.value.toString()==(d->prefs.preferredIm().isEmpty()?d->input.inputMethod():d->prefs.preferredIm());}
  else if(id.startsWith("choice/screen:"))c.checked=c.value.toInt()==d->prefs.screenIndex();
  else if(id.startsWith("modifier/"))c.checked=d->modifiers.contains(id.mid(9));

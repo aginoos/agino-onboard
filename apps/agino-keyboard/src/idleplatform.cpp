@@ -42,7 +42,8 @@ const QString device=QStringLiteral("org.agino.KeyboardDevice1");
 const QString session=QStringLiteral("org.deepin.dde.SessionManager1");
 const QString component=QStringLiteral("agino-keyboard");
 const QString action=QStringLiteral("show-keyboard");
-const QStringList actionId{component,action,QStringLiteral("屏幕键盘"),QStringLiteral("显示屏幕键盘")};
+// Built when used: the friendly names are translated and the translator is installed after static initialization.
+QStringList actionId(){return {component,action,QCoreApplication::translate("Keyboard","Screen Keyboard"),QCoreApplication::translate("Keyboard","Show Screen Keyboard")};}
 bool owner(const QDBusConnection &bus,const QString &name,const QDBusMessage &m){
  const auto reply=bus.interface()->serviceOwner(name);
  return reply.isValid()&&!reply.value().isEmpty()&&reply.value()==m.service();
@@ -53,7 +54,7 @@ QDBusMessage method(const QString &service,const QString &path,const QString &in
 QVariantMap menuProperties(int id){
  if(id==0)return {{"children-display","submenu"}};
  if(id==3)return {{"type","separator"}};
- return {{"label",id==1?QStringLiteral("显示屏幕键盘"):id==2?QStringLiteral("设置"):QStringLiteral("退出")},{"enabled",true},{"visible",true}};
+ return {{"label",id==1?QCoreApplication::translate("Keyboard","Show Screen Keyboard"):id==2?QCoreApplication::translate("Keyboard","Settings"):QCoreApplication::translate("Keyboard","Quit")},{"enabled",true},{"visible",true}};
 }
 MenuLayout layout(int id,int depth){
  MenuLayout result{id,menuProperties(id),{}};
@@ -74,19 +75,19 @@ struct IdlePlatform::Private: QDBusVirtualObject {
   ++generation;
   if(!shortcutPath.isEmpty())bus.disconnect(accel,shortcutPath,"org.kde.kglobalaccel.Component","globalShortcutPressed",q,SLOT(shortcutPressed(QString,QString,qlonglong,QDBusMessage)));
   shortcutPath.clear();
-  if(bus.isConnected())bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","unRegister",{actionId}));
+  if(bus.isConnected())bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","unRegister",{actionId()}));
  }
  void bindShortcut(){
   if(!shortcutConfigured)return;
   unregisterShortcut();const auto serial=generation;int key=IdlePlatform::parseShortcut(shortcut);
-  if(!key){shortcutFailure=QStringLiteral("快捷键需要修饰键和有效按键");emit q->capabilitiesChanged();return;}
-  shortcutFailure=QStringLiteral("快捷键注册失败");
-  auto registration=method(accel,"/kglobalaccel","org.kde.KGlobalAccel","doRegister",{actionId});registration.setAutoStartService(true);
+  if(!key){shortcutFailure=QCoreApplication::translate("Keyboard","A shortcut needs a modifier key and a valid key");emit q->capabilitiesChanged();return;}
+  shortcutFailure=QCoreApplication::translate("Keyboard","Shortcut registration failed");
+  auto registration=method(accel,"/kglobalaccel","org.kde.KGlobalAccel","doRegister",{actionId()});registration.setAutoStartService(true);
   auto *w=new QDBusPendingCallWatcher(bus.asyncCall(registration,1000),q);
   QObject::connect(w,&QDBusPendingCallWatcher::finished,q,[this,w,serial,key]{
    QDBusPendingReply<> reply=*w;w->deleteLater();if(serial!=generation)return;
    if(reply.isError()){emit q->capabilitiesChanged();return;}
-   auto *s=new QDBusPendingCallWatcher(bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","setShortcut",{actionId,QVariant::fromValue(QList<int>{key}),uint(6)}),1000),q);
+   auto *s=new QDBusPendingCallWatcher(bus.asyncCall(method(accel,"/kglobalaccel","org.kde.KGlobalAccel","setShortcut",{actionId(),QVariant::fromValue(QList<int>{key}),uint(6)}),1000),q);
    QObject::connect(s,&QDBusPendingCallWatcher::finished,q,[this,s,serial,key]{
     QDBusPendingReply<QList<int>> assigned=*s;s->deleteLater();if(serial!=generation)return;
     if(assigned.isError()||!assigned.value().contains(key)){emit q->capabilitiesChanged();return;}
@@ -106,14 +107,14 @@ struct IdlePlatform::Private: QDBusVirtualObject {
  QVariant trayProperty(const QString &name)const {
   if(name=="Category")return "ApplicationStatus";
   if(name=="Id")return component;
-  if(name=="Title")return QStringLiteral("屏幕键盘");
+  if(name=="Title")return QCoreApplication::translate("Keyboard","Screen Keyboard");
   if(name=="Status")return "Active";
   if(name=="IconName")return component;
   if(name=="IconThemePath"||name=="AttentionIconName"||name=="OverlayIconName")return QString();
   if(name=="WindowId")return uint(0);
   if(name=="ItemIsMenu")return false;
   if(name=="Menu")return QVariant::fromValue(QDBusObjectPath("/MenuBar"));
-  if(name=="ToolTip")return QVariant::fromValue(TrayTooltip{component,{},QStringLiteral("屏幕键盘"),{}});
+  if(name=="ToolTip")return QVariant::fromValue(TrayTooltip{component,{},QCoreApplication::translate("Keyboard","Screen Keyboard"),{}});
   if(name.endsWith("Pixmap"))return QVariant::fromValue(QList<TrayPixmap>());
   return {};
  }
@@ -216,15 +217,15 @@ IdlePlatform::IdlePlatform(QObject *parent):QObject(parent),d(std::make_unique<P
   }
  }
  auto *services=new QDBusServiceWatcher(this);services->setConnection(bus);services->setWatchMode(QDBusServiceWatcher::WatchForOwnerChange);services->addWatchedService(watcher);services->addWatchedService(accel);services->addWatchedService(session);if(d->wl)services->addWatchedService(device);
- connect(services,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &name,const QString &,const QString &newOwner){if(name==watcher&&!newOwner.isEmpty())d->registerTray();else if(name==accel){if(newOwner.isEmpty()){d->unregisterShortcut();d->shortcutFailure=tr("快捷键注册失败");emit capabilitiesChanged();}else d->bindShortcut();}else if(name==session){++d->lockRevision;}else if(name==device){d->source=!newOwner.isEmpty();emit capabilitiesChanged();}});
+ connect(services,&QDBusServiceWatcher::serviceOwnerChanged,this,[this](const QString &name,const QString &,const QString &newOwner){if(name==watcher&&!newOwner.isEmpty())d->registerTray();else if(name==accel){if(newOwner.isEmpty()){d->unregisterShortcut();d->shortcutFailure=QCoreApplication::translate("Keyboard","Shortcut registration failed");emit capabilitiesChanged();}else d->bindShortcut();}else if(name==session){++d->lockRevision;}else if(name==device){d->source=!newOwner.isEmpty();emit capabilitiesChanged();}});
  bus.registerVirtualObject("/StatusNotifierItem",d.get());bus.registerVirtualObject("/MenuBar",d.get());d->registerTray();
 }
 IdlePlatform::~IdlePlatform()=default;
 bool IdlePlatform::wayland()const{return d->wl;}
 bool IdlePlatform::automaticReady()const{return d->layer&&d->text&&d->source;}
 QString IdlePlatform::status()const{
- if(d->wl)return !d->layer||!d->text?tr("Wayland 停靠插件或 layer-shell / 文本输入协议不可用"):d->source?tr("Wayland：支持触屏来源检测和手动呼出"):tr("Wayland：无法确认设备来源，使用手动呼出");
- return d->source?tr("X11：支持触屏来源检测和手动呼出"):tr("X11：无法确认设备来源，使用手动呼出");
+ if(d->wl)return !d->layer||!d->text?QCoreApplication::translate("DesktopAdapter","The Wayland docking plugin or the layer-shell / text-input protocol is unavailable"):d->source?QCoreApplication::translate("DesktopAdapter","Wayland: touch detection and manual activation are supported"):QCoreApplication::translate("DesktopAdapter","Wayland: the input device cannot be identified, manual activation only");
+ return d->source?QCoreApplication::translate("DesktopAdapter","X11: touch detection and manual activation are supported"):QCoreApplication::translate("DesktopAdapter","X11: the input device cannot be identified, manual activation only");
 }
 QString IdlePlatform::shortcutError()const{return d->shortcutFailure;}
 void IdlePlatform::setShortcut(QString text){if(d->shortcutConfigured&&d->shortcut==text)return;d->shortcutConfigured=true;d->shortcut=text;d->bindShortcut();}

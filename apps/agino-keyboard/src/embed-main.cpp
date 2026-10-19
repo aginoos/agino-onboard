@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include "keyboardstate.h"
 #include "fcitxclient.h"
+#include "i18n.h"
 #include "preferences.h"
 #include "startupdpi.h"
 #include "native/nativepanel.h"
@@ -79,7 +80,8 @@ int main(int argc,char **argv){
  StartupDpiPolicy dpiPolicy;
  QGuiApplication app(argc,argv);
  dpiPolicy.restore();
- app.setOrganizationName("agino");app.setApplicationName("agino-keyboard-embed");app.setApplicationDisplayName("屏幕键盘");
+ AginoI18n::install(app);
+ app.setOrganizationName("agino");app.setApplicationName("agino-keyboard-embed");app.setApplicationDisplayName(QCoreApplication::translate("Keyboard","Screen Keyboard"));
  app.setQuitOnLastWindowClosed(false);
 
  Preferences prefs;

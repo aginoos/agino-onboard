@@ -82,7 +82,7 @@ Rectangle {
   sourceComponent:Rectangle {
   color:D.DTK.palette.window;radius:8
   ListView {
-   id:flow;objectName:"candidateFlow";Accessible.role:Accessible.List;Accessible.name:"更多候选词";
+   id:flow;objectName:"candidateFlow";Accessible.role:Accessible.List;Accessible.name:qsTranslate("Keyboard","More candidates");
    Accessible.onScrollDownAction:{if(enabled){contentY=Math.min(Math.max(0,contentHeight-height),contentY+height/2);if(atYEnd&&input.hasNext)input.requestPage(true)}}
    Accessible.onScrollUpAction:if(enabled)contentY=Math.max(0,contentY-height/2);anchors.fill:parent;anchors.margins:4;clip:true;spacing:8;boundsBehavior:Flickable.StopAtBounds;maximumFlickVelocity:0
    model:CandidateRows {candidates:keyboardRoot.input.candidates;availableWidth:flow.width;font:flowFont.font}

@@ -29,10 +29,10 @@ Item {
  Image {
   id:applicationIcon;objectName:"applicationIcon";x:4;anchors.verticalCenter:parent.verticalCenter;width:bar.panel.compact?18:24;height:width
   property int rasterSize:Math.round(width*Screen.devicePixelRatio)
-  source:rasterSize>=1&&rasterSize<=192?"image://keyboard-icon/"+rasterSize:Qt.resolvedUrl("../data/agino-keyboard.svg");sourceSize.width:rasterSize>=1&&rasterSize<=192?rasterSize:width;sourceSize.height:sourceSize.width;Accessible.name:"屏幕键盘"
+  source:rasterSize>=1&&rasterSize<=192?"image://keyboard-icon/"+rasterSize:Qt.resolvedUrl("../data/agino-keyboard.svg");sourceSize.width:rasterSize>=1&&rasterSize<=192?rasterSize:width;sourceSize.height:sourceSize.width;Accessible.name:qsTranslate("Keyboard","Screen Keyboard")
  }
  ListView {
-  id:list;Accessible.role:Accessible.List;Accessible.name:"候选词";
+  id:list;Accessible.role:Accessible.List;Accessible.name:qsTranslate("Keyboard","Candidates");
   Accessible.onScrollLeftAction:{if(enabled){contentX=Math.max(0,contentX-width/2);if(atXBeginning&&input.hasPrev)input.requestPage(false)}}
   Accessible.onScrollRightAction:{if(enabled){contentX=Math.min(Math.max(0,contentWidth-width),contentX+width/2);if(atXEnd&&input.hasNext)input.requestPage(true)}}
   visible:bar.hasCandidates;enabled:!bar.panel.dragOwner;x:bar.iconSlotWidth+8;y:0;width:Math.max(0,(bar.hasCandidates?expand.x:statusLabel.x)-x-8);height:bar.height;orientation:ListView.Horizontal;spacing:bar.panel.compact?6:8;clip:true;model:bar.entries
@@ -53,15 +53,15 @@ Item {
  }
  D.Label {
   id:statusLabel;objectName:"inputMethodStatus";visible:!bar.hasCandidates;anchors.right:settings.left;anchors.rightMargin:6;y:0;width:visible?Math.min(implicitWidth,bar.width*0.35):0;height:bar.height
-  text:bar.panel.compact?(input.sensitive?"锁":(input.inputLanguageCode||"—")):input.inputMethodStatus;horizontalAlignment:Text.AlignRight;font.pixelSize:bar.panel.compact?13:14;opacity:0.75;elide:Text.ElideRight;verticalAlignment:Text.AlignVCenter
+  text:bar.panel.compact?(input.sensitive?qsTranslate("Keyboard","Lock"):(input.inputLanguageCode||"—")):input.inputMethodStatus;horizontalAlignment:Text.AlignRight;font.pixelSize:bar.panel.compact?13:14;opacity:0.75;elide:Text.ElideRight;verticalAlignment:Text.AlignVCenter
  }
  KeyTile {
   id:settings;objectName:"settingsButton";visible:!bar.hasCandidates;enabled:visible&&(!bar.panel.dragOwner||bar.panel.dragOwner===settings)
-  anchors.right:parent.right;y:0;width:bar.height;height:bar.height;toolbar:true;iconScale:bar.panel.compact?0.58:0.75;iconStrokeWidth:1.2;label:"设置";sym:0;actionName:"Settings";movable:true;controller:bar.panel.controller;panel:bar.panel
+  anchors.right:parent.right;y:0;width:bar.height;height:bar.height;toolbar:true;iconScale:bar.panel.compact?0.58:0.75;iconStrokeWidth:1.2;label:qsTranslate("Keyboard","Settings");sym:0;actionName:"Settings";movable:true;controller:bar.panel.controller;panel:bar.panel
  }
  D.ToolButton {
   id:expand;objectName:"expandButton";visible:bar.hasCandidates;enabled:!bar.panel.dragOwner;anchors.right:parent.right;y:0;width:bar.height;height:bar.height;focusPolicy:Qt.NoFocus;checked:bar.expanded
-  Accessible.name:bar.expanded?"收起候选词":"展开候选词"
+  Accessible.name:bar.expanded?qsTranslate("Keyboard","Collapse candidates"):qsTranslate("Keyboard","Expand candidates")
   contentItem:Item {
    Item {objectName:"expandIcon";anchors.centerIn:parent;width:14;height:14
     Canvas {anchors.fill:parent;property color ink:D.DTK.palette.windowText;onInkChanged:requestPaint()

@@ -18,6 +18,7 @@
 #include <QDBusPendingReply>
 #include <QDBusServiceWatcher>
 #include <DGuiApplicationHelper>
+#include "i18n.h"
 #include "keyboardstate.h"
 #include "keysound.h"
 #include "fcitxclient.h"
@@ -92,7 +93,7 @@ public:
  bool ensurePanel(){
   idleTimer.stop();
   if(view&&view->rootObject())return true;
-  if(!view){view=std::make_unique<NativePanel>(prefs,client,state);view->setTitle(tr("屏幕键盘"));view->setScreen(selectedScreen());if(!desktop.attach(view.get())){view.reset();state.dismiss();panelMessage(false,desktop.status());return false;}}
+  if(!view){view=std::make_unique<NativePanel>(prefs,client,state);view->setTitle(tr("Screen Keyboard"));view->setScreen(selectedScreen());if(!desktop.attach(view.get())){view.reset();state.dismiss();panelMessage(false,desktop.status());return false;}}
   view->setScreenNames(availableScreenNames());
   if(!view->rootObject()){state.dismiss();return false;}
   QObject::connect(view->rootObject(),SIGNAL(settingsRequested()),this,SLOT(Settings()));
@@ -111,7 +112,7 @@ public:
    client.refreshSnapshot();client.setPolicyBlocked(false);
   });
  }
- void sizeWarning(){state.dismiss();QTimer::singleShot(0,this,[this]{if(state.layoutFits())return;unloadPanel();warningOpen_=true;panelMessage(true,tr("当前屏幕缩放不足以容纳完整键盘，请选择紧凑模式或减小缩放。"));warningOpen_=false;idleTimer.start();});}
+ void sizeWarning(){state.dismiss();QTimer::singleShot(0,this,[this]{if(state.layoutFits())return;unloadPanel();warningOpen_=true;panelMessage(true,tr("The screen scaling is too large for the full keyboard. Choose the compact layout or reduce the scaling."));warningOpen_=false;idleTimer.start();});}
  bool validSize(){if(state.layoutFits())return true;sizeWarning();return false;}
  QStringList availableScreenNames()const{QStringList names;for(auto screen:qGuiApp->screens())names<<screen->name();return names;}
  QScreen *selectedScreen()const{auto screens=qGuiApp->screens();auto screen=prefs.screenIndex()>=0&&prefs.screenIndex()<screens.size()?screens[prefs.screenIndex()]:desktop.targetOutput();return screen?screen:qGuiApp->primaryScreen();}
@@ -156,13 +157,13 @@ int main(int argc,char **argv){
  // This input-provider surface has no editable controls. Its Fcitx bridge
  // is direct DBus; it must not register a second Fcitx input-client context.
  qputenv("QT_IM_MODULE","compose");
- StartupDpiPolicy dpiPolicy;std::unique_ptr<QGuiApplication> application=std::make_unique<QGuiApplication>(argc,argv);auto &app=*application;dpiPolicy.restore();app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");app.setApplicationDisplayName("屏幕键盘");app.setQuitOnLastWindowClosed(false);
+ StartupDpiPolicy dpiPolicy;std::unique_ptr<QGuiApplication> application=std::make_unique<QGuiApplication>(argc,argv);auto &app=*application;dpiPolicy.restore();AginoI18n::install(app);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");app.setApplicationDisplayName(QCoreApplication::translate("Keyboard","Screen Keyboard"));app.setQuitOnLastWindowClosed(false);
  if(!errorMessage.isEmpty()){panelMessage(information,errorMessage);return information?0:2;}
 
  auto bus=QDBusConnection::sessionBus();const QString service=qEnvironmentVariableIsSet("AGINO_MANAGED_UI")?"org.agino.KeyboardPanel1":"org.agino.KeyboardUi1";
  if(!bus.registerService(service)){auto m=QDBusMessage::createMethodCall(service,"/Keyboard",service,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
  Preferences prefs;FcitxClient client;
- VirtualKeyboardUi ui;if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")&&!ui.start()){panelMessage(false,QStringLiteral("已有屏幕键盘占用 Fcitx5 界面，请先关闭该应用。"));return 2;}if(ui.ownsInterface()&&!enableVirtualKeyboard()){panelMessage(false,QStringLiteral("无法保存 Fcitx5 屏幕键盘配置。"));return 2;}
+ VirtualKeyboardUi ui;if(!qEnvironmentVariableIsSet("AGINO_MANAGED_UI")&&!ui.start()){panelMessage(false,QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}if(ui.ownsInterface()&&!enableVirtualKeyboard()){panelMessage(false,QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
  KeyboardState state;DesktopAdapter desktop;
  if(QGuiApplication::platformName().startsWith("wayland")&&!desktop.capabilities().waylandReady()){qCritical().noquote()<<desktop.status();return 4;}
  if(qEnvironmentVariableIsSet("AGINO_MANAGED_UI")){

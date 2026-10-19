@@ -183,7 +183,7 @@ public:
     }
     QAccessible::Role role() const override { return QAccessible::Pane; }
     QString text(QAccessible::Text type) const override {
-        return type == QAccessible::Name ? QStringLiteral("屏幕键盘") : QString();
+        return type == QAccessible::Name ? QCoreApplication::translate("Keyboard","Screen Keyboard") : QString();
     }
     QRect rect() const override {
         return m_window ? QRect(m_window->mapToGlobal(QPoint()), m_window->size()) : QRect();

@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <QProcessEnvironment>
+#include "i18n.h"
 #include "keyboardstate.h"
 #include "fcitxclient.h"
 #include "virtualkeyboardui.h"
@@ -41,7 +42,7 @@ public:
    const bool restart=retiring&&code==0&&kind==QProcess::NormalExit&&!pending.isEmpty();
    if(!restart)pending.clear();
    ready=false;retiring=false;cached["visible"]=false;cached["settingsVisible"]=false;cached["viewCreated"]=false;cached["panelLoaded"]=false;
-   state.dismiss();if(code||kind==QProcess::CrashExit)cached["workerError"]=tr("界面进程已退出，可重新呼出");
+   state.dismiss();if(code||kind==QProcess::CrashExit)cached["workerError"]=tr("The keyboard window has exited; show it again to restart it");
    if(restart)QTimer::singleShot(0,this,[this]{startWorker();});
    if(!capture.isEmpty())QCoreApplication::exit(code==0&&QFileInfo::exists(capture)?0:2);
 #if defined(__GLIBC__)
@@ -157,13 +158,13 @@ static void errorDialog(const QString &message){
  QProcess dialog;const pid_t parent=getpid();dialog.setChildProcessModifier([parent]{if(prctl(PR_SET_PDEATHSIG,SIGTERM)<0||getppid()!=parent)_exit(2);});dialog.start(path,{"--error-message",message});if(dialog.waitForStarted())dialog.waitForFinished(-1);
 }
 int main(int argc,char **argv){
- QCoreApplication app(argc,argv);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");
+ QCoreApplication app(argc,argv);app.setOrganizationName("agino");app.setApplicationName("agino-keyboard");AginoI18n::install(app);
  bool hidden=false,settings=false;QString capture;for(int i=1;i<argc;++i){QByteArray a(argv[i]);hidden|=a=="--hidden";settings|=a=="--settings";if(a=="--screenshot"&&i+1<argc)capture=QString::fromLocal8Bit(argv[++i]);}
  auto bus=QDBusConnection::sessionBus();if(!bus.registerService(publicService)){auto m=QDBusMessage::createMethodCall(publicService,uiPath,uiInterface,settings?"Settings":"Show");bus.asyncCall(m,1000);return 0;}
- VirtualKeyboardUi ui;if(!ui.start()){errorDialog(QStringLiteral("已有屏幕键盘占用 Fcitx5 界面，请先关闭该应用。"));return 2;}
+ VirtualKeyboardUi ui;if(!ui.start()){errorDialog(QCoreApplication::translate("Keyboard","Another screen keyboard is using the Fcitx5 interface. Close that application first."));return 2;}
  if(ui.ownsInterface()){
   const QString path=QDir(qEnvironmentVariable("XDG_CONFIG_HOME",QDir::homePath()+"/.config")).filePath("fcitx5/conf/virtualkeyboard.conf");
-  if(!enableVirtualKeyboardConfig(path)){errorDialog(QStringLiteral("无法保存 Fcitx5 屏幕键盘配置。"));return 2;}
+  if(!enableVirtualKeyboardConfig(path)){errorDialog(QCoreApplication::translate("Keyboard","Cannot save the Fcitx5 screen keyboard configuration."));return 2;}
   auto m=QDBusMessage::createMethodCall("org.fcitx.Fcitx5","/controller","org.fcitx.Fcitx.Controller1","ReloadConfig");m.setAutoStartService(false);bus.asyncCall(m,1000);
  }
  Preferences prefs;FcitxClient client;IdlePlatform platform;Broker broker(prefs,client,platform);broker.setCapture(capture);

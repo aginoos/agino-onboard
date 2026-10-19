@@ -23,7 +23,7 @@ FcitxClient::FcitxClient(QObject *p):QObject(p){
  bus.connect(service,path,service,"PhysicalKey",this,SIGNAL(physicalKey()));
  QTimer::singleShot(0,this,&FcitxClient::refresh);
 }
-void FcitxClient::clear(){++pageRevision_;++generation_;++namesRevision_;reconnectTimer_.start();appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("等待 Fcitx5 屏幕键盘插件");emit changed();}
+void FcitxClient::clear(){++pageRevision_;++generation_;++namesRevision_;reconnectTimer_.start();appliedPolicyRevision_=0;policyInFlight_=false;policyRefreshPending_=false;namesInFlight_=false;namesRetryTimer_.stop();namesRetries_=0;connected_=editable_=sensitive_=next_=prev_=paging_=false;context_=candidate_=0;preedit_.clear();candidates_.clear();im_.clear();ims_.clear();imNames_.clear();imStatuses_.clear();imLanguages_.clear();status_=tr("Waiting for the Fcitx5 screen keyboard plugin");emit changed();}
 void FcitxClient::ownerChanged(const QString &,const QString &,const QString &owner){++generation_;clear();if(!owner.isEmpty())refresh();}
 void FcitxClient::refresh(){
  if(standalone_)return;
@@ -54,11 +54,11 @@ void FcitxClient::requestInputMethodNames(){
    entries.beginStructure();entries>>id>>name>>nativeName>>icon>>label>>language>>configurable;entries.endStructure();
    if(ims_.contains(id)){
     const QString displayName=nativeName.isEmpty()?name:nativeName;
-    names.insert(id,id=="keyboard-us"?tr("英语（美国）"):displayName);
+    names.insert(id,id=="keyboard-us"?tr("English (US)"):displayName);
     const QLocale locale(language);QString languageName;
-    if(locale.language()==QLocale::Chinese)languageName=tr("中文");else if(locale.language()==QLocale::English)languageName=tr("英文");else if(locale.language()!=QLocale::C)languageName=locale.nativeLanguageName();
+    if(locale.language()==QLocale::Chinese)languageName=tr("Chinese");else if(locale.language()==QLocale::English)languageName=tr("English");else if(locale.language()!=QLocale::C)languageName=locale.nativeLanguageName();
     languages.insert(id,locale.language()==QLocale::Chinese?QStringLiteral("CN"):locale.language()==QLocale::C?QString():QLocale::languageToCode(locale.language()).toUpper());
-    statuses.insert(id,languageName.isEmpty()?displayName:languageName+QStringLiteral("：")+displayName);
+    statuses.insert(id,languageName.isEmpty()?displayName:tr("%1: %2").arg(languageName,displayName));
    }
   }entries.endArray();imNames_=names;imStatuses_=statuses;imLanguages_=languages;namesRetries_=0;emit changed();
  });
@@ -75,7 +75,7 @@ void FcitxClient::snapshot(const QDBusMessage &m){
  context_=context;candidate_=candidate;editable_=a[2].toBool();sensitive_=a[3].toBool();preedit_=a[4].toString();im_=a[5].toString();candidates_=qdbus_cast<QStringList>(a[6]);prev_=a[7].toBool();next_=a[8].toBool();connected_=true;reconnectTimer_.stop();
  synchronizePolicy();
  if(!editable()||sensitive()){preedit_.clear();candidates_.clear();next_=prev_=false;}
- status_=editable()?(sensitive()?tr("安全输入"):QString()):tr("请先选择输入框");emit changed();emit targetRect(a[10].toInt(),a[11].toInt());
+ status_=editable()?(sensitive()?tr("Secure input"):QString()):tr("Select a text field first");emit changed();emit targetRect(a[10].toInt(),a[11].toInt());
 }
 void FcitxClient::call(const QString &method,const QVariantList &args){if(!connected_)return;auto m=QDBusMessage::createMethodCall(service,path,service,method);m.setArguments(args);m.setAutoStartService(false);auto w=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m,1500),this);auto gen=generation_;connect(w,&QDBusPendingCallWatcher::finished,this,[this,w,gen]{auto reply=w->reply();w->deleteLater();if(gen!=generation_)return;if(reply.type()==QDBusMessage::ErrorMessage){clear();} });}
 bool FcitxClient::sendKey(KeySpec k,bool release,quint64 epoch){if(!editable()||epoch!=context_)return false;call("SendKey",{k.sym,k.code,k.modifiers,release,QVariant::fromValue(epoch)});return true;}
