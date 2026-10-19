@@ -1,6 +1,6 @@
 # Agino Onboard
 
-Agino 屏幕键盘，当前 Qt 版本 **0.1.21**。支持 X11、Wayland、触屏、Fcitx5 候选词集成和标准/紧凑布局。界面使用 QtGui/QPainter，遵循 Deepin/DTK 风格。
+Agino 屏幕键盘，当前 Qt 版本 **0.1.22**。支持 X11、Wayland、触屏、Fcitx5 候选词集成和标准/紧凑布局。界面使用 QtGui/QPainter，遵循 Deepin/DTK 风格。
 
 - [应用功能、依赖与编译说明](apps/agino-keyboard/README.md)
 - [当前版本验证记录](docs/screen-keyboard-standard-cursor-021.md)

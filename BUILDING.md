@@ -1,6 +1,6 @@
 # 构建与测试
 
-当前版本 0.1.21，正式前端为 QtGui/QPainter。代码为匹配的 Deepin Qt6/DTK6/Fcitx5/KWin 环境开发，不是任意发行版上的通用二进制包。
+当前版本 0.1.22，正式前端为 QtGui/QPainter。代码为匹配的 Deepin Qt6/DTK6/Fcitx5/KWin 环境开发，不是任意发行版上的通用二进制包。
 
 ## 环境
 
