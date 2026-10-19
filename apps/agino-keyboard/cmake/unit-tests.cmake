@@ -1,0 +1,37 @@
+# The unit tests: they need only Qt Test and a private session bus (AGINO_UNIT_TESTS, also run by the Debian build).
+include(CTest)
+find_package(Qt6 REQUIRED COMPONENTS Test)
+
+
+add_executable(test-keyboard-state tests/test_keyboardstate.cpp)
+target_link_libraries(test-keyboard-state PRIVATE keyboard-state Qt6::Test)
+add_test(NAME keyboard-state COMMAND test-keyboard-state)
+add_executable(test-fcitx-metadata tests/test_fcitxmetadata.cpp)
+target_link_libraries(test-fcitx-metadata PRIVATE fcitx-client Qt6::Test)
+add_test(NAME fcitx-metadata-recovery COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/private-bus-session.sh $<TARGET_FILE:test-fcitx-metadata>)
+add_executable(test-keysender tests/test_keysender.cpp)
+target_link_libraries(test-keysender PRIVATE keyboard-state Qt6::Test)
+add_test(NAME keyboard-keysender COMMAND test-keysender)
+add_executable(test-native-accessible src/native/nativeaccessible.cpp src/native/nativeaccessible_test.cpp)
+target_link_libraries(test-native-accessible PRIVATE Qt6::Gui)
+
+add_executable(test-native-panel tests/test_nativepanel_interaction.cpp)
+target_link_libraries(test-native-panel PRIVATE native-panel fcitx-client candidate-rows panel-platform Qt6::Test Qt6::Gui Dtk6::Gui)
+add_test(NAME keyboard-native-panel-interaction COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/private-bus-session.sh ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-panel>)
+set_tests_properties(keyboard-native-panel-interaction PROPERTIES TIMEOUT 30)
+add_test(NAME keyboard-native-accessibility COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-accessible>)
+set_tests_properties(keyboard-native-accessibility PROPERTIES TIMEOUT 30)
+
+add_executable(test-native-candidate-rows src/native/nativecandidaterows.cpp src/native/nativecandidaterows_test.cpp)
+target_link_libraries(test-native-candidate-rows PRIVATE candidate-rows Qt6::Test)
+add_test(NAME keyboard-native-candidate-rows COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-candidate-rows>)
+add_executable(test-native-painting-bands src/native/nativepainting.cpp tests/test_nativepainting_bands.cpp)
+target_include_directories(test-native-painting-bands PRIVATE src)
+target_link_libraries(test-native-painting-bands PRIVATE Qt6::Gui)
+add_test(NAME keyboard-native-painting-bands COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-painting-bands>)
+
+add_executable(test-native-settings src/preferences.h src/native/nativesettings_test.cpp src/native/nativesettings.cpp src/native/nativepainting.cpp)
+target_include_directories(test-native-settings PRIVATE src src/native)
+target_link_libraries(test-native-settings PRIVATE fcitx-client Qt6::Gui Dtk6::Gui)
+add_test(NAME keyboard-native-settings COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/private-bus-session.sh ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-settings>)
+set_tests_properties(keyboard-native-settings PROPERTIES TIMEOUT 30)

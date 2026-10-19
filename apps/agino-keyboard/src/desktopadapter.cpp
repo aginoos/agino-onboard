@@ -10,7 +10,9 @@
 #include <QDBusConnectionInterface>
 #include <QDBusPendingReply>
 #include "waylandproperties.h"
+#ifdef AGINO_WAYLAND_SHELL
 #include <qpa/qplatformnativeinterface.h>
+#endif
 #include <wayland-client.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
@@ -50,8 +52,12 @@ void DesktopAdapter::detectWayland(){
  wl_registry_add_listener(registry,&listener,&caps_);wl_display_roundtrip(display);wl_registry_destroy(registry);wl_display_disconnect(display);
  // Check the actual selected integration before mapping any panel; never
  // substitute an ordinary shell window when our bundled plugin is unavailable.
+#ifdef AGINO_WAYLAND_SHELL
  QWindow probe;probe.create();auto native=QGuiApplication::platformNativeInterface();
  caps_.layer=caps_.layer&&native&&native->nativeResourceForWindow(KeyboardWayland::IntegrationResource,&probe);
+#else
+ caps_.layer=false;   // built without the shell plugin: no Wayland panel
+#endif
  auto bus=QDBusConnection::sessionBus();
  caps_.source=bus.interface()->isServiceRegistered("org.agino.KeyboardDevice1").value();
  bus.connect("org.agino.KeyboardDevice1","/org/agino/KeyboardDevice1","org.agino.KeyboardDevice1","SourceChanged",this,SLOT(deviceSource(uint,double,double)));
