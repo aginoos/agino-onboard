@@ -24,6 +24,7 @@
 #include "log.h"
 #include "peercheck.h"
 #include "panelstatus.h"
+#include "autostart.h"
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -152,6 +153,7 @@ private:
  void apply(){
   if(!initialized||preferred!=prefs.preferredIm()){initialized=true;preferred=prefs.preferredIm();preferredPending=!preferred.isEmpty();resume.applyPreferred=true;}
   state.setMode(prefs.mode()==2?KeyboardState::Off:prefs.mode()==0&&platform.automaticReady()?KeyboardState::Automatic:KeyboardState::Manual);
+  if(!Autostart::sync(prefs.mode()==0,QStringLiteral(AGINO_AUTOSTART_TEMPLATE)))qCWarning(lcController(),"Cannot update the autostart entry of the screen keyboard");
   client.setSafeInput(prefs.safeInput());client.suspend(locked);platform.setShortcut(prefs.shortcut());applyPreferred();
  }
  void request(const QString &action){

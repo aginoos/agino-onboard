@@ -19,7 +19,8 @@ public:
  // memoryOnly: nothing is read from or written to a settings file (the keyboard of the login and lock screens has a fixed look).
  explicit Preferences(QObject *p=nullptr,bool memoryOnly=false):QObject(p),memoryOnly_(memoryOnly){if(!memoryOnly_)normalizeOpacity();}
  bool functionRow()const{return get("functionRow",false).toBool();}
- int mode()const{return qBound(0,get("mode",0).toInt(),2);}
+ // 0 automatic (touch input shows the keyboard), 1 manual, 2 off. The default is manual: nothing starts the controller at login, the user runs the keyboard.
+ int mode()const{return qBound(0,get("mode",1).toInt(),2);}
  bool compact()const{return get("compact",false).toBool();}
  int opacityPercent()const{return qBound(50,get("opacityPercent",100).toInt(),100);}
  bool keySound()const{return get("keySound",false).toBool();}

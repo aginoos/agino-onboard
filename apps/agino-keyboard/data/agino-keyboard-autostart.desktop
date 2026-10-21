@@ -21,3 +21,5 @@ Exec=systemd-run --user --collect --quiet --unit=agino-keyboard -p Restart=on-fa
 Icon=agino-keyboard
 OnlyShowIn=Deepin;DDE;
 X-GNOME-Autostart-enabled=true
+# The controller writes this file to ~/.config/autostart while the automatic mode is chosen and removes it in the other modes (src/autostart.h).
+X-Agino-Autostart-Managed=true

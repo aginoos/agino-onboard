@@ -67,10 +67,11 @@ add_executable(agino-keyboard src/broker.cpp src/preferences.h)
 add_dependencies(agino-keyboard agino-keyboard-dialog)
 target_link_libraries(agino-keyboard PRIVATE fcitx-client idle-platform)
 # The programs the controller trusts on the bus (see the bridge target above, SEC-10).
-target_compile_definitions(agino-keyboard PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui")
+target_compile_definitions(agino-keyboard PRIVATE AGINO_TRUSTED_CONTROLLER="${CMAKE_INSTALL_PREFIX}/bin/agino-keyboard" AGINO_TRUSTED_UI="${CMAKE_INSTALL_PREFIX}/libexec/agino-keyboard-ui" AGINO_AUTOSTART_TEMPLATE="${CMAKE_INSTALL_PREFIX}/share/agino-keyboard/autostart/agino-keyboard.desktop")
 install(TARGETS agino-keyboard RUNTIME DESTINATION bin)
 install(FILES data/agino-keyboard.desktop DESTINATION share/applications)
-install(FILES data/agino-keyboard-autostart.desktop DESTINATION /etc/xdg/autostart RENAME agino-keyboard.desktop)
+# Not in /etc/xdg/autostart: the controller is not started at login. The controller copies this file to the user's autostart directory while the user has chosen the automatic mode (src/autostart.h).
+install(FILES data/agino-keyboard-autostart.desktop DESTINATION share/agino-keyboard/autostart RENAME agino-keyboard.desktop)
 install(FILES data/agino-keyboard.svg DESTINATION share/icons/hicolor/scalable/apps)
 
 set(AGINO_WAYLAND_MODULE "" CACHE FILEPATH "Patched matching Fcitx Wayland frontend")
