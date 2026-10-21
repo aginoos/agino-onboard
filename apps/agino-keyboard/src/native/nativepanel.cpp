@@ -133,7 +133,10 @@ void NativePanel::render(QPainter &p,QSizeF sz){
 }
 void NativePanel::paint(){
  if(!isExposed()||painting_)return;painting_=true;
- if(!x11Output_.paint(this,[this](QPainter &p,QSizeF size){render(p,size);})){
+ // The keyboard of the login and lock screens (embedded) goes through Qt's backing store, like every other widget of those screens: the
+ // band by band XPutImage of NativeX11Output reached only the first band (31 rows of 208) of the window on an X server with glamor (the
+ // laptop's virgl GPU), the rest stayed black. The embedded window is small (524 x 208), so the backing store costs next to nothing.
+ if(embedded_||!x11Output_.paint(this,[this](QPainter &p,QSizeF size){render(p,size);})){
   store_.resize(size());const QRegion region(QRect(QPoint(),size()));store_.beginPaint(region);QPainter painter(store_.paintDevice());painter.setCompositionMode(QPainter::CompositionMode_Source);painter.fillRect(QRect(QPoint(),size()),Qt::transparent);painter.setCompositionMode(QPainter::CompositionMode_SourceOver);render(painter,size());painter.end();store_.endPaint();store_.flush(region,this);
  }
  if(frameMs_<0&&frameStart_.isValid())frameMs_=frameStart_.nsecsElapsed()/1000000.;painting_=false;notifyNativeAccessibility(this);
