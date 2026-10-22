@@ -1,6 +1,6 @@
 # 构建与测试
 
-当前版本 0.1.24，正式前端为 QtGui/QPainter。代码为匹配的 Deepin Qt6/DTK6/Fcitx5/KWin 环境开发，不是任意发行版上的通用二进制包。
+当前版本 0.1.25，正式前端为 QtGui/QPainter。代码为匹配的 Deepin Qt6/DTK6/Fcitx5/KWin 环境开发，不是任意发行版上的通用二进制包。
 
 ## 环境
 
@@ -8,7 +8,7 @@
 - Qt 6.8.0（当前 Wayland private API 精确约束）、Qt Base/Wayland 私有开发头文件；DTK6 Gui/Declarative。
 - Qt QML/Quick/QuickControls2/QuickTest：用于保留的回归测试，正式界面不加载 QML。
 - Fcitx5 Core/Utils、libcanberra、Wayland client/server、Wayland protocols、X11/Xi/Xtst、xcb/xcb-xfixes、GTK3 开发包。
-- 完整会话测试需要 Xvfb、xauth、DBus、KWin、XWayland、Fcitx5、拼音、GTK/Qt 输入法前端、字体和音频测试环境。
+- `AGINO_UNIT_TESTS` 中的嵌入 X11 窗口回归也需要 Xvfb、xauth 和 DBus；完整会话测试还需要 KWin、XWayland、Fcitx5、拼音、GTK/Qt 输入法前端、字体和音频测试环境。
 - 真实 AT-SPI 测试需要 at-spi2-registryd、Python pyatspi/GI；搜狗测试仅在自行安装匹配搜狗的隔离环境启用，不附带搜狗二进制。
 
 依赖安装列表见 `scripts/guest/build-screen-keyboard.sh`。该脚本只供一次性构建容器运行，会修改容器包和输入法模块；不要直接在日常主机运行。

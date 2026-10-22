@@ -1,4 +1,4 @@
-# The unit tests: they need only Qt Test and a private session bus (AGINO_UNIT_TESTS, also run by the Debian build).
+# Unit tests and the embedded X11 drawable regression (Qt Test, a private session bus and Xvfb; also run by the Debian build).
 include(CTest)
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
@@ -33,6 +33,15 @@ add_test(NAME keyboard-native-panel-interaction COMMAND ${CMAKE_CURRENT_SOURCE_D
 set_tests_properties(keyboard-native-panel-interaction PROPERTIES TIMEOUT 30)
 add_test(NAME keyboard-native-accessibility COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen $<TARGET_FILE:test-native-accessible>)
 set_tests_properties(keyboard-native-accessibility PROPERTIES TIMEOUT 30)
+
+add_executable(test-embedded-visual tests/test_embedvisual.cpp)
+target_link_libraries(test-embedded-visual PRIVATE Qt6::Core Qt6::Test X11::X11)
+target_compile_definitions(test-embedded-visual PRIVATE AGINO_EMBED_EXECUTABLE="$<TARGET_FILE:agino-keyboard-embed>")
+add_dependencies(test-embedded-visual agino-keyboard-embed)
+foreach(scale IN ITEMS 1 2)
+ add_test(NAME keyboard-embedded-visual-${scale} COMMAND xvfb-run -a -s "-screen 0 2560x1600x24" ${CMAKE_CURRENT_SOURCE_DIR}/tests/private-bus-session.sh ${CMAKE_COMMAND} -E env QT_SCALE_FACTOR=${scale} $<TARGET_FILE:test-embedded-visual>)
+ set_tests_properties(keyboard-embedded-visual-${scale} PROPERTIES TIMEOUT 30)
+endforeach()
 
 # tests/candidaterows.* is the original (QML-era) row layout, kept as the reference the lazy model must match.
 add_executable(test-native-candidate-rows src/native/nativecandidaterows.cpp src/native/nativecandidaterows_test.cpp tests/candidaterows.cpp)

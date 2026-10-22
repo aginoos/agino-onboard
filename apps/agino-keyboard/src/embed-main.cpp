@@ -13,6 +13,7 @@
 //  - the compact layout, always shown, never dismissed, no settings page, no files written.
 // It exits when its standard input is closed, when its parent process ends or on SIGTERM/SIGINT/SIGHUP.
 #include <QGuiApplication>
+#include <QSurfaceFormat>
 #include <QSocketNotifier>
 #include <QTimer>
 #include <csignal>
@@ -177,6 +178,9 @@ int main(int argc,char **argv){
  state.setContext(1,true,false);   // there is always a target: the focused window
  NativePanel panel(prefs,client,state);
  panel.setEmbedded(true);
+ // The foreign window is hosted by opaque QWidgets. An ARGB child turns black
+ // after embedding on the affected virgl setup; no per-pixel alpha is needed here.
+ auto embeddedFormat=panel.format();embeddedFormat.setAlphaBufferSize(0);panel.setFormat(embeddedFormat);
  panel.setFlags(Qt::FramelessWindowHint|Qt::X11BypassWindowManagerHint|Qt::WindowDoesNotAcceptFocus);
  const int height=panel.minimumHeight(),width=524;
  panel.setMinimumSize(QSize(width,height));panel.resize(width,height);

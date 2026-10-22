@@ -1,6 +1,8 @@
 #pragma once
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
 #include <QStandardPaths>
 // The controller is not started at login (the launcher icon starts it, so does the shortcut once it runs). Only while the user has chosen
 // the automatic mode, in which touch input shows the keyboard by itself and the controller must be there, it asks the session to start it
@@ -22,7 +24,7 @@ inline bool sync(bool wanted,const QString &templatePath,const QString &configHo
  const QByteArray content=source.readAll();
  if(exists){QFile current(path);if(current.open(QIODevice::ReadOnly)&&current.readAll()==content)return true;}
  if(!QDir().mkpath(QFileInfo(path).absolutePath()))return false;
- QFile target(path);if(!target.open(QIODevice::WriteOnly|QIODevice::Truncate))return false;
- return target.write(content)==content.size();
+ QSaveFile target(path);if(!target.open(QIODevice::WriteOnly))return false;
+ return target.write(content)==content.size()&&target.commit();
 }
 }

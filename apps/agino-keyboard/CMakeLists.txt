@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(agino-keyboard VERSION 0.1.24 LANGUAGES C CXX)
+project(agino-keyboard VERSION 0.1.25 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)

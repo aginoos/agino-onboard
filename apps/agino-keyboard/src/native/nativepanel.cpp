@@ -133,10 +133,7 @@ void NativePanel::render(QPainter &p,QSizeF sz){
 }
 void NativePanel::paint(){
  if(!isExposed()||painting_)return;painting_=true;
- // The keyboard of the login and lock screens (embedded) goes through Qt's backing store, like every other widget of those screens: the
- // band by band XPutImage of NativeX11Output reached only the first band (31 rows of 208) of the window on an X server with glamor (the
- // laptop's virgl GPU), the rest stayed black. The embedded window is small (524 x 208), so the backing store costs next to nothing.
- if(embedded_||!x11Output_.paint(this,[this](QPainter &p,QSizeF size){render(p,size);})){
+ if(!x11Output_.paint(this,[this](QPainter &p,QSizeF size){render(p,size);})){
   store_.resize(size());const QRegion region(QRect(QPoint(),size()));store_.beginPaint(region);QPainter painter(store_.paintDevice());painter.setCompositionMode(QPainter::CompositionMode_Source);painter.fillRect(QRect(QPoint(),size()),Qt::transparent);painter.setCompositionMode(QPainter::CompositionMode_SourceOver);render(painter,size());painter.end();store_.endPaint();store_.flush(region,this);
  }
  if(frameMs_<0&&frameStart_.isValid())frameMs_=frameStart_.nsecsElapsed()/1000000.;painting_=false;notifyNativeAccessibility(this);
@@ -147,7 +144,8 @@ void NativePanel::measureNextFrame(const QElapsedTimer &time,quint64 serial){fra
 QImage NativePanel::grabWindow(){QImage image(qRound(width()*devicePixelRatio()),qRound(height()*devicePixelRatio()),QImage::Format_ARGB32_Premultiplied);image.setDevicePixelRatio(devicePixelRatio());image.fill(Qt::transparent);QPainter p(&image);render(p,size());return image;}
 void NativePanel::updateCorners(bool force){if(QGuiApplication::platformName()!="xcb")return;auto wm=Dtk::Gui::DWindowManagerHelper::instance();bool composited=wm->hasComposite()||x11CompositeAvailable();setTransparencySupported(composited);
  if(wm->hasNoTitlebar()&&Dtk::Gui::DPlatformHandle::isDXcbPlatform()){if(!decoration_){decoration_=std::make_unique<Dtk::Gui::DPlatformHandle>(this);decoration_->setEnableSystemResize(false);decoration_->setEnableSystemMove(false);decoration_->setBorderWidth(0);}decoration_->setWindowRadius(qRound(radius()));}
- QRegion region;if(!composited){QPainterPath outline;outline.addRoundedRect(QRectF(0,0,width(),height()),radius(),radius());region=QRegion(outline.toFillPolygon().toPolygon());}if(force||region!=mask())setMask(region);
+ // The embedded window has an opaque visual, so its corners need a shape even with a compositor.
+ QRegion region;if(embedded_||!composited){QPainterPath outline;outline.addRoundedRect(QRectF(0,0,width(),height()),radius(),radius());region=QRegion(outline.toFillPolygon().toPolygon());}if(force||region!=mask())setMask(region);
 }
 void NativePanel::cancelContacts(){holdTimer_.stop();state_.cancelAll();contacts_.clear();dragOwner_=NoOwner;alternatives_.clear();requestUpdate();}
 void NativePanel::pointerBegin(int id,QPointF local,QPointF global){

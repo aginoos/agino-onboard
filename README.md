@@ -1,9 +1,15 @@
 # Agino Onboard
 
-Agino 屏幕键盘，当前 Qt 版本 **0.1.24**。支持 X11、Wayland、触屏、Fcitx5 候选词集成和标准/紧凑布局。界面使用 QtGui/QPainter，遵循 Deepin/DTK 风格。
+Agino 屏幕键盘，当前 Qt 版本 **0.1.25**。支持 X11、Wayland、触屏、Fcitx5 候选词集成和标准/紧凑布局。界面使用 QtGui/QPainter，遵循 Deepin/DTK 风格。
+
+## 0.1.25
+
+- 默认手动呼出，不随登录启动。用户从启动器运行屏幕键盘；在键盘设置里选择自动模式后，才创建用户自己的登录自启动项，改回手动或关闭模式会移除该托管项。用户自行编写的同名项不覆盖。
+- 修复登录/锁屏嵌入键盘在受影响的 X11/virgl 环境里显示后变黑：嵌入窗口使用不透明像素格式，并保留原生圆角裁剪。桌面键盘的透明效果和有界分条绘制不变。
+- 新增真实嵌入窗口的回归检查，覆盖缩放 1 和 2、宿主重挂、隐藏/显示、清空后的重绘，以及关闭标准输入后正常退出。构建检查需要 Xvfb 和 xauth。
 
 - [应用功能、依赖与编译说明](apps/agino-keyboard/README.md)
-- [当前版本验证记录](docs/screen-keyboard-standard-cursor-021.md)
+- [原生前端 0.1.21 的历史验证记录](docs/screen-keyboard-standard-cursor-021.md)
 - [最近内存复测](docs/screen-keyboard-memory-remeasurement-021.md)
 
 ## 编译
