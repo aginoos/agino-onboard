@@ -80,6 +80,7 @@ public:
   QObject::connect(view->rootObject(),SIGNAL(settingsRequested()),this,SLOT(Settings()));
   QObject::connect(view->rootObject(),SIGNAL(moveRequested(double,double)),this,SLOT(MoveBy(double,double)));
   QObject::connect(view->rootObject(),SIGNAL(minimumHeightChanged()),this,SLOT(Resize()));
+  if(!desktop.wayland()){view->setSystemMove(true);QObject::connect(view.get(),&NativePanel::systemMoveStarting,&desktop,&DesktopAdapter::beginSystemMove);}
   resizePanel();return true;
  }
  NativePanel *panel()const{return view.get();}

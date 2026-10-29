@@ -95,6 +95,7 @@ bool DesktopAdapter::attach(QWindow *w){
  setOutput(w->screen());auto resized=[this]{if(wayland_&&floating_&&negotiatedSize_.isValid()&&window_->size()!=negotiatedSize_)return;updateGeometry();};connect(w,&QWindow::heightChanged,this,resized);connect(w,&QWindow::widthChanged,this,resized);return true;
 }
 void DesktopAdapter::detach(){
+ adoptWindowPosition();if(moveWatch_)moveWatch_->stop();
  if(window_){retainedSize_=window_->size();retainedOutput_=output_;restoringGeometry_=true;setPanelVisible(false);disconnect(window_,nullptr,this,nullptr);window_->removeEventFilter(this);}
  if(output_)disconnect(output_,nullptr,this,nullptr);
  window_.clear();output_.clear();
@@ -117,6 +118,7 @@ void DesktopAdapter::setOutput(QScreen *screen){
 }
 void DesktopAdapter::updateGeometry(){
  if(configuring_||!window_||!output_)return;
+ adoptWindowPosition();
  const auto g=output_->geometry();
  if(floating_){position_.setX(qBound(0.0,position_.x(),double(qMax(0,g.width()-window_->width()))));position_.setY(qBound(0.0,position_.y(),double(qMax(0,g.height()-window_->height()))));}
  if(wayland_){
@@ -138,6 +140,7 @@ bool DesktopAdapter::eventFilter(QObject *object,QEvent *event){
 }
 void DesktopAdapter::configurePanel(QScreen *screen,QSize size){
  if(!window_||!screen)return;
+ adoptWindowPosition();
  if(wayland_&&requestedSize_==size&&requestedOutput_==screen){if(!floating_||window_->size()==negotiatedSize_)updateGeometry();return;}
  requestedSize_=size;requestedOutput_=screen;
  // Grow/shrink the candidate strip above a floating keyboard, keeping its
@@ -150,10 +153,28 @@ void DesktopAdapter::configurePanel(QScreen *screen,QSize size){
 }
 void DesktopAdapter::moveBy(double dx,double dy){
  if(!window_||!output_||!window_->isVisible()||!std::isfinite(dx)||!std::isfinite(dy))return;
+ adoptWindowPosition();
  const auto g=output_->geometry();
  if(!floating_)position_=wayland_?QPoint((g.width()-window_->width())/2,g.height()-window_->height()):window_->position()-g.topLeft();
  floating_=true;position_+=QPointF(qBound(-double(g.width()),dx,double(g.width())),qBound(-double(g.height()),dy,double(g.height())));updateGeometry();
 }
+// Polled at 10 Hz while the window manager moves the window: once no button is down, the window's position becomes the
+// floating position and is kept inside the output, as for a drag of the keyboard itself.
+void DesktopAdapter::beginSystemMove(){
+ if(wayland_||!display_||!window_||!output_||!window_->isVisible())return;
+ adoptWindowPosition();if(!floating_){position_=window_->position()-output_->geometry().topLeft();floating_=true;strut(false);}
+ positionFromWindow_=true;
+ if(!moveWatch_){
+  moveWatch_=new QTimer(this);moveWatch_->setInterval(100);
+  connect(moveWatch_,&QTimer::timeout,this,[this]{
+   auto d=static_cast<Display*>(display_);Window root=0,child=0;int rx=0,ry=0,wx=0,wy=0;unsigned int mask=0;
+   if(XQueryPointer(d,DefaultRootWindow(d),&root,&child,&rx,&ry,&wx,&wy,&mask)&&(mask&(Button1Mask|Button2Mask|Button3Mask)))return;
+   moveWatch_->stop();updateGeometry();
+  });
+ }
+ moveWatch_->start();
+}
+void DesktopAdapter::adoptWindowPosition(){if(!positionFromWindow_)return;positionFromWindow_=false;if(window_&&output_)position_=window_->position()-output_->geometry().topLeft();}
 void DesktopAdapter::strut(bool visible){if(!display_||!window_)return;
  // A floating panel reserves no space: once cleared, moving it needs no round trip to the X server.
  if(!visible&&strutCleared_)return;strutCleared_=!visible;
@@ -180,9 +201,9 @@ QScreen *DesktopAdapter::targetOutput()const{
 
 void DesktopAdapter::screensaver(bool v){if(screensaver_!=v)qCInfo(lcSession())<<"Screensaver:"<<(v?"active":"inactive");screensaver_=v;emit lockedChanged(locked_||screensaver_||sleeping_);}
 
-QVariantMap DesktopAdapter::placement()const{return {{"floating",floating_},{"floatX",position_.x()},{"floatY",position_.y()},{"outputName",output_?output_->name():retainedOutput_?retainedOutput_->name():QString()}};}
+QVariantMap DesktopAdapter::placement()const{const QPointF position=positionFromWindow_&&window_&&output_?QPointF(window_->position()-output_->geometry().topLeft()):position_;return {{"floating",floating_},{"floatX",position.x()},{"floatY",position.y()},{"outputName",output_?output_->name():retainedOutput_?retainedOutput_->name():QString()}};}
 void DesktopAdapter::restorePlacement(const QVariantMap &value){
- floating_=value.value("floating").toBool();position_=QPointF(value.value("floatX").toDouble(),value.value("floatY").toDouble());
+ positionFromWindow_=false;floating_=value.value("floating").toBool();position_=QPointF(value.value("floatX").toDouble(),value.value("floatY").toDouble());
  // The controlling process can observe touch focus before this process exists.
  if(value.value("sourceKind").toInt()>=KeyboardState::Mouse&&value.value("sourceKind").toInt()<=KeyboardState::Pen){auto screen=qGuiApp->screenAt(QPoint(qRound(value.value("sourceX").toDouble()),qRound(value.value("sourceY").toDouble())));if(screen)targetOutput_=screen;}
 }

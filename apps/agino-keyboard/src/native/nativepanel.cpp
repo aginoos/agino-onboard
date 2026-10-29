@@ -180,6 +180,9 @@ void NativePanel::pointerMove(int id,QPointF local,QPointF global){
   }else contact.suppressed=true;
  }
  contacts_[id]=contact;scheduleHold();
+ // The window manager moves the window for a mouse drag, in step with its frames, like a DTK title bar; one request per
+ // pointer event from here queues up behind a busy compositor. Touch, and a window manager that refuses, move it from here.
+ if(contact.moving&&!wasMoving&&dragOwner_==id&&id==-1&&systemMove_){emit systemMoveStarting();if(dragOwner_==id&&startSystemMove()){pointerEnd(id,local,true);return;}}
  if(contact.moving&&dragOwner_==id)emit moveRequested(delta.x(),delta.y());
  else if(contact.scrolling){if(picker)settings_.scroll(-delta.y());else scroll(contact.scrollArea,contact.scrollArea=="expanded"?-delta.y():-delta.x());}
  if(contacts_.contains(id))contacts_[id].previousGlobal=global;

@@ -38,6 +38,8 @@ public:
  // Embedded in the login and lock screens: no settings gear, no input method label and no Hide or Language key (the keyboard is
  // always shown and there is no input method to switch); their places stay empty.
  void setEmbedded(bool value){if(embedded_==value)return;embedded_=value;requestUpdate();}
+ // X11 desktop: a mouse drag asks the window manager to move the window (systemMoveStarting first), as a DTK title bar does.
+ void setSystemMove(bool value){systemMove_=value;}
  void measureNextFrame(const QElapsedTimer&,quint64);
  double firstFrameMilliseconds()const{return frameMs_;}quint64 firstFrameSerial()const{return frameMs_<0?0:frameSerial_;}
  QImage grabWindow();
@@ -46,7 +48,7 @@ public:
  QVector<NativeControl> accessibleControls()const override;
  bool invokeAccessible(const QString&,const QString&)override;
 signals:
- void settingsRequested();void moveRequested(double,double);void minimumHeightChanged();void expandedChanged();
+ void settingsRequested();void moveRequested(double,double);void systemMoveStarting();void minimumHeightChanged();void expandedChanged();
 protected:bool event(QEvent*)override;void exposeEvent(QExposeEvent*)override;void resizeEvent(QResizeEvent*)override;
 private:
  struct Contact {NativeControl control;QString scrollArea;QPointF originGlobal,previousGlobal,originLocal;bool moving=false,scrolling=false,alternative=false,suppressed=false;qint64 holdAt=-1;quint64 context=0;};
@@ -59,7 +61,7 @@ private:
  Preferences &prefs_;FcitxClient &input_;KeyboardState &state_;QBackingStore store_;NativeX11Output x11Output_;NativeSettings settings_;NativeCandidateRows candidateRows_;
  QVector<NativeControl> controls_;QHash<int,Contact> contacts_;int dragOwner_=-999999;
  quint64 alternativeGeneration_=0,alternativeContext_=0;bool layoutCompact_=false;
- bool expanded_=false,functionRow_=false,transparency_=true,painting_=false,embedded_=false;QStringList screens_;
+ bool expanded_=false,functionRow_=false,transparency_=true,painting_=false,embedded_=false,systemMove_=false;QStringList screens_;
  quint64 candidateContext_=0,candidateGeneration_=0;QStringList words_;qreal candidateOffset_=0,candidateContent_=0,expandedOffset_=0,expandedContent_=0;
  QTimer holdTimer_;QElapsedTimer pointerClock_;QStringList alternatives_;QRectF alternativeRect_;QString hovered_;
  QElapsedTimer frameStart_;quint64 frameSerial_=0;double frameMs_=-1;

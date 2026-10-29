@@ -151,6 +151,20 @@ private slots:
   const QPointF local=panel.mapFromGlobal(pointer);mouse(panel,QEvent::MouseButtonRelease,local,Qt::LeftButton,Qt::NoButton);
   QTRY_VERIFY(updates.count>0);
  }
+ // A mouse drag asks the window manager first (once, when the drag starts); the offscreen platform has no window manager
+ // move, so the panel keeps moving the window itself. Touch never asks.
+ void systemMoveIsAskedOnceAndFallsBack(){
+  Harness h;QVERIFY(prepare(h));auto &panel=*h.panel;panel.setSystemMove(true);
+  const auto a=control(panel,{},'a'),e=control(panel,{},'e');QVERIFY(!a.id.isEmpty()&&!e.id.isEmpty());
+  QSignalSpy asks(&panel,&NativePanel::systemMoveStarting),moves(&panel,&NativePanel::moveRequested);
+  const QPointF start=a.rect.center();mouse(panel,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+  for(int i=1;i<=5;++i)mouse(panel,QEvent::MouseMove,start+QPointF(20*i,0),Qt::NoButton,Qt::LeftButton);
+  QCOMPARE(asks.size(),1);QCOMPARE(moves.size(),5);
+  mouse(panel,QEvent::MouseButtonRelease,start+QPointF(100,0),Qt::LeftButton,Qt::NoButton);
+  const QPoint point=e.rect.center().toPoint();auto touch=QTest::touchEvent(&panel,device,false);
+  touch.press(7,point,&panel).commit();touch.move(7,point+QPoint(40,0),&panel).commit();touch.release(7,point+QPoint(40,0),&panel).commit();
+  QCOMPARE(asks.size(),1);QCOMPARE(moves.size(),6);
+ }
  void moveSignalReentryCanCancelContact(){
   Harness h;QVERIFY(prepare(h));auto &panel=*h.panel;const auto key=control(panel,{},'a');QVERIFY(!key.id.isEmpty());
   connect(&panel,&NativePanel::moveRequested,&h.state,[&](double,double){h.state.dismiss();});
