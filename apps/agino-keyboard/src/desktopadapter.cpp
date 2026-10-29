@@ -149,7 +149,13 @@ void DesktopAdapter::configurePanel(QScreen *screen,QSize size){
  const QScreen *previousOutput=restoringGeometry_?retainedOutput_.data():output_.data();
  if(floating_&&(!wayland_||!negotiatedSize_.isValid())&&screen==previousOutput&&size.width()==previousSize.width())position_.ry()+=previousSize.height()-size.height();
  restoringGeometry_=false;
- configuring_=true;setOutput(screen);if(window_->size()!=size)window_->resize(size);configuring_=false;if(!wayland_||!floating_||!negotiatedSize_.isValid()||window_->size()==negotiatedSize_)updateGeometry();
+ configuring_=true;setOutput(screen);
+ // X11: a fixed size (minimum = maximum) keeps the window manager from maximizing or tiling the keyboard dragged to a screen
+ // edge (beginSystemMove). The limits take in the old and the new size until the window has its new size.
+ if(!wayland_){window_->setMaximumSize(size.expandedTo(window_->size()));window_->setMinimumSize(size.boundedTo(window_->size()));}
+ if(window_->size()!=size)window_->resize(size);
+ if(!wayland_){window_->setMinimumSize(size);window_->setMaximumSize(size);}
+ configuring_=false;if(!wayland_||!floating_||!negotiatedSize_.isValid()||window_->size()==negotiatedSize_)updateGeometry();
 }
 void DesktopAdapter::moveBy(double dx,double dy){
  if(!window_||!output_||!window_->isVisible()||!std::isfinite(dx)||!std::isfinite(dy))return;

@@ -46,6 +46,14 @@ private slots:
   adapter.configurePanel(panel.screen(),QSize(900,348));QCOMPARE(panel.position()+QPoint(0,panel.height()),bottom);
   adapter.configurePanel(panel.screen(),QSize(900,300));QCOMPARE(panel.position()+QPoint(0,panel.height()),bottom);
  }
+ void x11PanelHasAFixedSize(){
+  // The window manager must not maximize or tile the keyboard dragged to a screen edge: minimum = maximum = its size.
+  DesktopAdapter adapter;QWindow panel;panel.resize(900,300);QVERIFY(adapter.attach(&panel));
+  if(adapter.wayland())QSKIP("X11 only");
+  for(const QSize size:{QSize(900,348),QSize(934,300),QSize(600,400),QSize(900,300)}){
+   adapter.configurePanel(panel.screen(),size);QCOMPARE(panel.size(),size);QCOMPARE(panel.minimumSize(),size);QCOMPARE(panel.maximumSize(),size);
+  }
+ }
  void candidateResizeAfterUnloadKeepsFloatingBottom(){
   DesktopAdapter adapter;auto old=std::make_unique<QWindow>();old->resize(900,348);QVERIFY(adapter.attach(old.get()));adapter.setPanelVisible(true);adapter.moveBy(-20,-60);
   const QPoint bottom=old->position()+QPoint(0,old->height());adapter.detach();old.reset();
