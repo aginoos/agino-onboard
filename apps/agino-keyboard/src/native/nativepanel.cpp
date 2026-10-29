@@ -164,7 +164,7 @@ void NativePanel::pointerBegin(int id,QPointF local,QPointF global){
 }
 void NativePanel::pointerMove(int id,QPointF local,QPointF global){
  auto it=contacts_.find(id);if(it==contacts_.end()||(dragOwner_!=NoOwner&&dragOwner_!=id))return;
- Contact contact=it.value();const QPointF delta=global-contact.previousGlobal,travel=global-contact.originGlobal;
+ Contact contact=it.value();const bool wasMoving=contact.moving,wasSuppressed=contact.suppressed;const QPointF delta=global-contact.previousGlobal,travel=global-contact.originGlobal;
  if(contact.control.action=="settings/opacity"){settings_.drag(contact.control,local);if(contacts_.contains(id))contacts_[id].previousGlobal=global;return;}
  if(contact.alternative){const bool approach=!alternatives_.isEmpty()&&local.x()>=alternativeRect_.left()&&local.x()<alternativeRect_.right()&&local.y()>=alternativeRect_.top()&&local.y()<=contact.control.rect.bottom();if(approach||std::hypot(travel.x(),travel.y())<16)return;alternatives_.clear();contact.alternative=false;}
  const bool candidate=!contact.scrollArea.isEmpty();
@@ -183,8 +183,9 @@ void NativePanel::pointerMove(int id,QPointF local,QPointF global){
  if(contact.moving&&dragOwner_==id)emit moveRequested(delta.x(),delta.y());
  else if(contact.scrolling){if(picker)settings_.scroll(-delta.y());else scroll(contact.scrollArea,contact.scrollArea=="expanded"?-delta.y():-delta.x());}
  if(contacts_.contains(id))contacts_[id].previousGlobal=global;
- // A finger that only trembles on a key changes nothing on the screen.
- if(contact.moving||contact.scrolling||contact.suppressed)requestUpdate();
+ // A finger that only trembles on a key changes nothing on the screen, and neither does moving the window: the panel
+ // is repainted when a drag starts (its keys show as released and disabled) and while the content scrolls.
+ if(contact.scrolling||contact.moving!=wasMoving||contact.suppressed!=wasSuppressed)requestUpdate();
 }
 void NativePanel::pointerEnd(int id,QPointF local,bool canceled){auto it=contacts_.find(id);if(it==contacts_.end())return;const Contact contact=it.value();contacts_.erase(it);scheduleHold();if(dragOwner_!=NoOwner&&dragOwner_!=id){if(contact.control.sym)state_.release(id,false);return;}
  if(contact.moving){if(dragOwner_==id)dragOwner_=NoOwner;}
@@ -278,7 +279,7 @@ bool NativePanel::event(QEvent *event){
  switch(event->type()){
  case QEvent::UpdateRequest:paint();return true;
  case QEvent::MouseButtonPress:{auto e=static_cast<QMouseEvent*>(event);if(e->button()==Qt::LeftButton&&e->source()==Qt::MouseEventNotSynthesized){pointerBegin(-1,e->position(),e->globalPosition());return true;}break;}
- case QEvent::MouseMove:{auto e=static_cast<QMouseEvent*>(event);if(e->source()!=Qt::MouseEventNotSynthesized)break;pointerMove(-1,e->position(),e->globalPosition());QString hover;for(const auto &c:controls_)if(c.enabled&&pointInside(c.rect,e->position())&&c.role!=QAccessible::List)hover=c.id;if(hover!=hovered_){hovered_=hover;requestUpdate();}return true;}
+ case QEvent::MouseMove:{auto e=static_cast<QMouseEvent*>(event);if(e->source()!=Qt::MouseEventNotSynthesized)break;pointerMove(-1,e->position(),e->globalPosition());QString hover;if(dragOwner_==NoOwner)for(const auto &c:controls_)if(c.enabled&&pointInside(c.rect,e->position())&&c.role!=QAccessible::List)hover=c.id;if(hover!=hovered_){hovered_=hover;requestUpdate();}return true;}
  case QEvent::MouseButtonRelease:{auto e=static_cast<QMouseEvent*>(event);if(e->button()==Qt::LeftButton&&e->source()==Qt::MouseEventNotSynthesized){pointerEnd(-1,e->position());return true;}break;}
  case QEvent::TouchBegin:case QEvent::TouchUpdate:case QEvent::TouchEnd:{auto e=static_cast<QTouchEvent*>(event);for(const auto &point:e->points()){switch(point.state()){case QEventPoint::State::Pressed:pointerBegin(point.id(),point.position(),point.globalPosition());break;case QEventPoint::State::Updated:pointerMove(point.id(),point.position(),point.globalPosition());break;case QEventPoint::State::Released:pointerEnd(point.id(),point.position());break;default:break;}}e->accept();return true;}
  case QEvent::TouchCancel:cancelContacts();return true;

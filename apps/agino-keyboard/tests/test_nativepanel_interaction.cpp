@@ -133,6 +133,24 @@ private slots:
   QVERIFY(!h.state.visible());mouse(panel,QEvent::MouseButtonRelease,start,Qt::LeftButton,Qt::NoButton);
   QVERIFY(h.prefs.opacityPercent()>=50&&h.prefs.opacityPercent()<=100);
  }
+ // Moving the window changes nothing inside it: once a drag has started (one repaint shows the keys released), the
+ // following moves repaint nothing, so the X server and the compositor do not receive the whole window again per event.
+ void movingWindowDoesNotRepaint(){
+  Harness h;QVERIFY(prepare(h));auto &panel=*h.panel;const auto key=control(panel,{},'a');QVERIFY(!key.id.isEmpty());
+  struct Updates:QObject{int count=0;bool eventFilter(QObject*,QEvent *e)override{if(e->type()==QEvent::UpdateRequest)++count;return false;}}updates;
+  panel.installEventFilter(&updates);
+  QSignalSpy moves(&panel,&NativePanel::moveRequested);
+  connect(&panel,&NativePanel::moveRequested,&panel,[&](double dx,double dy){panel.setPosition(panel.position()+QPoint(qRound(dx),qRound(dy)));});
+  const QPointF start=key.rect.center();QPointF pointer=panel.mapToGlobal(start);
+  auto move=[&](QPointF step){pointer+=step;const QPointF local=panel.mapFromGlobal(pointer);QMouseEvent e(QEvent::MouseMove,local,local,pointer,Qt::NoButton,Qt::LeftButton,Qt::NoModifier);QCoreApplication::sendEvent(&panel,&e);};
+  mouse(panel,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+  move({20,0});QCOMPARE(moves.size(),1);QTRY_VERIFY(updates.count>0);QTest::qWait(50);
+  updates.count=0;
+  for(int i=0;i<30;++i){move({2,1});QTest::qWait(2);}
+  QTest::qWait(50);QCOMPARE(moves.size(),31);QCOMPARE(updates.count,0);
+  const QPointF local=panel.mapFromGlobal(pointer);mouse(panel,QEvent::MouseButtonRelease,local,Qt::LeftButton,Qt::NoButton);
+  QTRY_VERIFY(updates.count>0);
+ }
  void moveSignalReentryCanCancelContact(){
   Harness h;QVERIFY(prepare(h));auto &panel=*h.panel;const auto key=control(panel,{},'a');QVERIFY(!key.id.isEmpty());
   connect(&panel,&NativePanel::moveRequested,&h.state,[&](double,double){h.state.dismiss();});
